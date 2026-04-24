@@ -1,0 +1,57 @@
+name: sailplanes
+# Vilpellet, Darmon & Benzaquen (2026), arXiv:2601.01293.
+# Vilpellet-derived empirical parameters (kept fixed):
+#   v_xy   = 35.85 m/s    (mean horizontal speed, Fig. 1 inset)
+#   mu_T   = 2.62         (Hill exponent, transition, Fig. 4i)
+#   mu_S   = 2.90         (Hill exponent, search,    Fig. 4i)
+#   mu_C   = 4.54         (Hill exponent, climb, not used in ML calibration)
+#   tau^C  ~ Exp(120 s)   (mean climb duration, Fig. 4c)
+#   alpha_S_asympt ~ 0.4  (weaker sub-diffusion of the search-phase CTRW,
+#                          read from the sailplane panel of [5] Fig. 3)
+#
+# Model-introduced parameters that we tune here (Vilpellet does not
+# publish these scales explicitly):
+#   tau_min^T = 166 s   so that <tau^T> = 166 * mu_T/(mu_T-1)
+#                       = 166 * 2.62/1.62 = 268.5 s  (~ paragliders 268.3)
+#   tau_min^S = 17.6 s  so that <tau^S> = 17.6 * mu_S/(mu_S-1)
+#                       = 17.6 * 2.90/1.90 = 26.9 s  (~ paragliders 26.9)
+# These two scales align the mean cycle duration <T> = <tau^T> +
+# <tau^S> + <tau^C> ~ 415 s with the paragliders value, which is the
+# condition that collapses delta^2(Delta) / v_xy^2 onto the paraglider
+# curve (Fig. 1 inset of [5], universal transport).
+v_xy: 35.85
+
+transition:
+  distribution: mittag_leffler
+  params: {alpha: 2.62, tau_0: 166.0}
+
+search:
+  distribution: mittag_leffler
+  params: {alpha: 2.90, tau_0: 17.6}
+
+climb:
+  distribution: exponential
+  params: {tau_mean: 120.0}
+
+# Universal: sigma_theta fixed at 0.35 rad across aircraft to respect the
+# (mu_T, sigma_theta) iso-line H_eff = 0.88 of the phase diagram.
+angular:
+  sigma_theta: 0.35
+  theta0: 0.0
+
+# Intra-phase search motion: generic modelling choices (not tuned on
+# Fig. 3 of [5]; only the paraglider block is). The empirical
+# alpha_S = 0.4 is taken from [5] Fig. 3c; other scales are generic.
+search_motion:
+  v_c_S: 89.625        # 2.5 * v_xy (modelling scale)
+  sigma_0: 1.0         # s, leg-duration scale
+  tau_0_S: 1.0         # s, waiting-time scale
+  alpha_S: 0.4         # sub-diffusive exponent, empirical from [5] Fig. 3c
+  sigma_psi_S: 0.5     # rad, intra-leg heading persistence
+
+# Intra-phase climb motion: generic thermal values, not tuned.
+climb_motion:
+  thermal_radius: 129.9   # m, thermal core radius (typical sailplane)
+  turn_period: 30.0       # s, circling period (typical for higher-wing-loading)
+  turn_period_std: 5.0    # s, per-cycle dispersion (Gaussian, clipped)
+  v_drift: 0.36           # m/s, orographic drift (typical)

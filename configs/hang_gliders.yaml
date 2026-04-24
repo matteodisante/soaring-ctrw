@@ -1,0 +1,65 @@
+name: hang_gliders
+# Vilpellet, Darmon & Benzaquen (2026), arXiv:2601.01293.
+# Vilpellet-derived empirical parameters (kept fixed):
+#   v_xy   = 15.58 m/s    (mean horizontal speed, Fig. 1 inset)
+#   mu_T   = 4.79         (Hill exponent, transition, Fig. 4f)
+#   mu_S   = 2.25         (Hill exponent, search,    Fig. 4f)
+#   mu_C   = 5.33         (Hill exponent, climb, not used in ML calibration)
+#   tau^C  ~ Exp(120 s)   (mean climb duration, Fig. 4c)
+#
+# Model-introduced parameters that we tune here (Vilpellet does not
+# publish these scales explicitly):
+#   tau_min^T = 212 s   so that <tau^T> = 212 * mu_T/(mu_T-1)
+#                       = 212 * 4.79/3.79 = 267.9 s  (~ paragliders 268.3)
+#   tau_min^S = 15  s   so that <tau^S> = 15  * mu_S/(mu_S-1)
+#                       = 15 * 2.25/1.25 = 27.0 s    (~ paragliders 26.9)
+# These two scales align the mean cycle duration <T> = <tau^T> +
+# <tau^S> + <tau^C> ~ 415 s with the paragliders value, which is the
+# condition that collapses delta^2(Delta) / v_xy^2 onto the paraglider
+# curve (Fig. 1 inset of [5], universal transport).
+v_xy: 15.58
+
+transition:
+  distribution: mittag_leffler
+  params: {alpha: 4.79, tau_0: 212.0}
+
+search:
+  distribution: mittag_leffler
+  params: {alpha: 2.25, tau_0: 15.0}
+
+climb:
+  distribution: exponential
+  params: {tau_mean: 120.0}
+
+# Universal: sigma_theta fixed at 0.35 rad across aircraft to respect the
+# (mu_T, sigma_theta) iso-line H_eff = 0.88 of the phase diagram.
+angular:
+  sigma_theta: 0.35
+  theta0: 0.0
+
+# Intra-phase search motion: paraglider-compatible modelling choices
+# (Vilpellet does not publish these scales). v_c_S is set equal to the
+# paraglider value so that the short-lag ballistic level of MSD_S
+# (proportional to v_c_S^2) aligns with the transition and climb MSDs
+# at Delta ~ 1 s (Fig. 6, panel b).
+search_motion:
+  v_c_S: 19.0          # m/s, leg speed (paraglider-compatible modelling scale)
+  sigma_0: 5.0         # s, leg-duration scale
+  tau_0_S: 1.5         # s, waiting-time scale
+  alpha_S: 0.6         # sub-diffusive exponent (carried over from [5] Fig. 3 paragliders)
+  sigma_psi_S: 0.5     # rad, intra-leg heading persistence
+
+# Intra-phase climb motion: paraglider-compatible turn dispersion
+# (turn_period_std / turn_period ~ 0.58), chosen so that the Gaussian
+# damping of the circular-oscillation term smears out the
+# anti-correlation dip and the climb MSD grows monotonically with
+# three regimes (short-lag ballistic at v_t = r_0 * 2*pi/T_turn,
+# intermediate saturation near 2*r_0^2, large-lag drift-dominated
+# ballistic recovery at v_drift), as in the paraglider panel of Fig. 6.
+# thermal_radius kept distinct (larger core for stronger thermals of
+# higher-wing-loading hang gliders).
+climb_motion:
+  thermal_radius: 58.1   # m, thermal core radius (typical hang glider)
+  turn_period: 60.0      # s, circling period (paraglider-compatible for monotonicity)
+  turn_period_std: 35.0  # s, per-cycle dispersion (Gaussian, clipped; paraglider-compatible)
+  v_drift: 1.0           # m/s, orographic drift (equal to paragliders)

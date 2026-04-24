@@ -1,0 +1,55 @@
+name: paragliders
+# Vilpellet, Darmon & Benzaquen (2026), arXiv:2601.01293.
+# Vilpellet-derived empirical parameters (Table 1 of our paper):
+#   v_xy   = 10.06 m/s    (mean horizontal speed, Fig. 1 inset)
+#   mu_T   = 3.93         (Hill exponent, transition, Fig. 4c)
+#   mu_S   = 3.88         (Hill exponent, search,    Fig. 4c)
+#   mu_C   = 8.28         (Hill exponent, climb, not used in ML calibration)
+#   tau^C  ~ Exp(120 s)   (mean climb duration, Fig. 4c)
+# Only the paraglider search_motion / climb_motion blocks are calibrated
+# on Fig. 3 of [5]; hang gliders and sailplanes use generic modelling choices.
+v_xy: 10.06
+
+transition:
+  distribution: mittag_leffler
+  params: {alpha: 3.93, tau_0: 200.0}
+
+search:
+  distribution: mittag_leffler
+  params: {alpha: 3.88, tau_0: 20.0}
+
+climb:
+  distribution: exponential
+  params: {tau_mean: 120.0}
+
+angular:
+  sigma_theta: 0.35
+  theta0: 0.0
+
+# Search: subordinated Lévy walk.
+# Interpretation: the pilot in search mode does NOT stand still. The
+# waiting times model tight circling in place (radius ≪ r_0_climb,
+# period few s), during which horizontal net displacement on GPS
+# sampling scale appears as a pause. The "ballistic legs" model brief
+# tactical manoeuvres between candidate updraft spots, at effective
+# speed v_c_S larger than the overall cruise speed v_xy (the pilot
+# flies quickly during repositioning).
+# Three regimes in MSD_S:
+#   Δ << sigma_0:                       ballistic (intra-leg)
+#   sigma_0 << Δ << tau_0_S (= tau_w^S): transient
+#   Δ >> tau_w^S:                       sub-diffusive Δ^alpha_S
+# Note: the field name `tau_0_S` here is the *intra-phase* ML wait
+# scale (tau_w^S in the PRL paper), distinct from the Pareto scale
+# tau_min^S of the cycle-duration scheduler in the `search` block above.
+search_motion:
+  v_c_S: 19            # m/s, leg speed during fast tactical repositioning
+  sigma_0: 3           # s, exponential scale of leg durations
+  tau_0_S: 3           # s, ML scale of intra-phase waits (tau_w^S)
+  alpha_S: 0.6         # asymptotic sub-diffusive exponent (Vilpellet Fig. 3a,b)
+  sigma_psi_S: 2       # rad, per-leg heading-increment standard deviation
+
+climb_motion:
+  thermal_radius: 50.0
+  turn_period: 60.0
+  turn_period_std: 35.0
+  v_drift: 1
