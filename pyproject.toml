@@ -45,7 +45,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/matteo-di-sante/soaring-ctrw"
+Homepage = "https://github.com/matteodisante/soaring-ctrw"
 
 [tool.setuptools.packages.find]
 where = ["src"]

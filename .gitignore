@@ -51,6 +51,9 @@ Thumbs.db
 # Simulation outputs (regenerable; the paper ships its own figures under paper/figures/)
 outputs/
 
+# Cached numerical arrays under paper/figures (regenerable from scripts/)
+paper/figures/*.npz
+
 # Jupyter
 .ipynb_checkpoints/
 
