@@ -25,19 +25,16 @@ large differences in characteristic speed, glide ratio and heavy-tail
 exponents of the phase durations. The paper adopts throughout the
 *survival convention* $P(\tau>t)\sim t^{-\mu}$ used by Vilpellet's
 Hill estimator. In this convention the coupled Lévy-walk prediction
-is $\delta^2\sim\Delta^{3-\mu_T}$, valid only for $1<\mu_T<2$. The
-Vilpellet-measured values μ_T ≈ 3.93, 4.79, 2.62 all sit *above* 2:
-the transition durations have finite second moment, so the
-asymptotic Lévy-walk regime never sets in and the naive prediction
-collapses to ordinary diffusion (*H* = 1/2). Vilpellet themselves
-discuss the alternative density-convention formula
-$\delta^2\sim\Delta^{4-\mu_T}$ (valid for $2<\mu_T<3$) and note that
-*H* = 0.88 would require μ ≈ 2.25 — a value that matches no
-aircraft, while the measured μ_T span both sides of it. A naive
-Lévy-walk reading of the data therefore fails on two counts: the
-exponents are mostly outside the formula's domain, and where they
-are inside (sailplanes, μ_T = 2.62) they predict *H* = 0.69, not
-0.88. The discrepancy points to two missing ingredients:
+for the MSD is $\delta^2\sim\Delta^{3-\mu_T}$, valid only for
+$1<\mu_T<2$; the density-convention form $\Delta^{4-\mu_T}$ valid
+for $2<\mu_T<3$ that appears in Vilpellet's Discussion is the same
+physical scaling relabelled via $\mu_{\rm density}=\mu_{\rm survival}+1$,
+not a separate prediction. Vilpellet's Hill-estimator values
+μ_T ≈ 3.93, 4.79, 2.62 all sit *above* 2 in survival convention:
+transition durations have finite second moment, the Lévy-walk
+asymptotic regime never sets in, and the naive prediction collapses
+to plain diffusion (*H* = 1/2), incompatible with the observed
+*H* ≈ 0.88. The discrepancy points to two missing ingredients:
 
 1. **Two-dimensional directional decorrelation** between successive
    ballistic segments.
