@@ -22,12 +22,22 @@ versions are bundled:
 The empirical paper of Vilpellet et al. (2026) reports a robust
 *H* ≈ 0.88 across paragliders, hang gliders and sailplanes despite
 large differences in characteristic speed, glide ratio and heavy-tail
-exponents of the phase durations. A naive Lévy-walk prediction
-*H* = (3 − μ_T)/2 — valid only for 1 < μ_T < 2 — applied to the
-measured tail exponents μ_T of transition phases gives inconsistent
-or physically nonsensical values for the three aircraft types
-(μ_T ≈ 3.93, 4.79, 2.62). The discrepancy points to two missing
-ingredients:
+exponents of the phase durations. The paper adopts throughout the
+*survival convention* $P(\tau>t)\sim t^{-\mu}$ used by Vilpellet's
+Hill estimator. In this convention the coupled Lévy-walk prediction
+is $\delta^2\sim\Delta^{3-\mu_T}$, valid only for $1<\mu_T<2$. The
+Vilpellet-measured values μ_T ≈ 3.93, 4.79, 2.62 all sit *above* 2:
+the transition durations have finite second moment, so the
+asymptotic Lévy-walk regime never sets in and the naive prediction
+collapses to ordinary diffusion (*H* = 1/2). Vilpellet themselves
+discuss the alternative density-convention formula
+$\delta^2\sim\Delta^{4-\mu_T}$ (valid for $2<\mu_T<3$) and note that
+*H* = 0.88 would require μ ≈ 2.25 — a value that matches no
+aircraft, while the measured μ_T span both sides of it. A naive
+Lévy-walk reading of the data therefore fails on two counts: the
+exponents are mostly outside the formula's domain, and where they
+are inside (sailplanes, μ_T = 2.62) they predict *H* = 0.69, not
+0.88. The discrepancy points to two missing ingredients:
 
 1. **Two-dimensional directional decorrelation** between successive
    ballistic segments.
@@ -120,17 +130,32 @@ pytest
 
 ## Status
 
-Calibration with σ_θ = 0.35 rad and matched mean cycle durations
-$\langle T\rangle \approx 415$ s reproduces the observed Hurst
-exponent *H* ≈ 0.88 within $|\Delta H| \lesssim 0.02$ for all three
-aircraft classes, on the paper observation window
-(10 s < Δ < 5×10³ s):
+The angular diffusivity σ_θ = 0.35 rad is *not* fitted aircraft by
+aircraft: it is set analytically by the phase diagram, on which the
+$H_{\rm eff}=0.88$ iso-contour of the bare-cycle MSD becomes nearly
+horizontal in $(\mu_T,\sigma_\theta)$ and crosses σ_θ ≃ 0.35
+essentially independently of μ_T. With σ_θ frozen at this universal
+value and the hang-glider / sailplane Pareto scales tuned only to
+match the paraglider mean cycle duration
+$\langle T\rangle \approx 415$ s (the condition that collapses
+$\delta^2/v_{xy}^2$ onto a single master curve), the full Monte
+Carlo produces a tight cluster of fitted Hurst exponents on the
+observation window 10 s < Δ < 5×10³ s:
 
 | aircraft      | μ_T (transition) | $\langle T\rangle$ (s) | H fitted |
 |---------------|:----------------:|:----------------------:|:--------:|
-| paragliders   |       3.93       |         415.2          |   0.88   |
-| hang gliders  |       4.79       |         414.9          |   0.87   |
-| sailplanes    |       2.62       |         415.3          |   0.88   |
+| paragliders   |       3.93       |         415.2          |  0.934   |
+| hang gliders  |       4.79       |         414.9          |  0.930   |
+| sailplanes    |       2.62       |         415.3          |  0.937   |
+
+The aircraft-to-aircraft spread is $|\Delta H|\lesssim 0.01$ across
+a factor ≈ 3.6 in horizontal speed and a factor ≈ 1.8 in the
+transition tail exponent — this is the universality the paper aims
+to explain. The cluster sits ≈ 0.05 above the empirical *H* ≈ 0.88;
+the discussion section of the paper documents this slight
+over-prediction and identifies it as the limitation set by treating
+the cycle-step model with $\sigma_\theta$ pinned analytically rather
+than fitted.
 
 The model reproduces both Fig. 1 (total MSD) and Fig. 3 (conditional
 per-phase MSD) of Vilpellet et al. (2026):
