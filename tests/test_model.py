@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 import yaml
 
-from soaring_ctrw.model import AngularConfig, PhaseConfig, SoaringConfig
-from soaring_ctrw.simulation import simulate_ensemble, simulate_single
+from model import AngularConfig, PhaseConfig, SoaringConfig
+from simulation import simulate_ensemble, simulate_single
 
 
 @pytest.fixture

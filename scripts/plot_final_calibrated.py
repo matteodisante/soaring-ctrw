@@ -17,9 +17,9 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-
-from soaring_ctrw import SoaringConfig, simulate_ensemble
-from soaring_ctrw.observables import msd_ensemble, fit_hurst
+from model import SoaringConfig
+from simulation import simulate_ensemble
+from observables import msd_ensemble, fit_hurst
 
 
 def local_slope(lags: np.ndarray, msd: np.ndarray, window_decades: float = 0.3) -> np.ndarray:

@@ -38,7 +38,7 @@ from typing import Any
 
 import yaml
 
-from soaring_ctrw.distributions import (
+from distributions import (
     Exponential,
     MittagLeffler,
     ParetoTail,
@@ -155,7 +155,7 @@ class SearchMotionConfig:
     Based on Vilpellet et al. (2026, Fig. 3), the conditional MSD of the
     search phase exhibits a ballistic regime at short lags (slope 2) and
     a sub-diffusive tail :math:`\\Delta^{\\alpha_S}` at longer lags with
-    :math:`\\alpha_S \\in (0, 1)`.
+    :math:`\\alpha_S \in (0, 1)`.
 
     We implement this as a **subordinated Lévy walk** (Fogedby 1994;
     Magdziarz-Weron 2007): inside each search phase of total duration
@@ -266,7 +266,7 @@ class ClimbMotionConfig:
     (Fig. 4h of~\\cite{vilpellet2026}), :math:`\\phi_0` is a random
     initial phase uniform on :math:`[0, 2\\pi)` for each cycle, and
     :math:`\\phi_n^{\\mathrm{drift}}` is a drift direction drawn
-    i.i.d. uniform per cycle from :math:`\\mathbb{S}^1`.
+    i.i.d. uniform per cycle from :math:`[0, 2\\pi)`.
 
     After ensemble-averaging over :math:`\\phi_0` (uniform on the
     circle) and the per-cycle turn period (Gaussian of mean

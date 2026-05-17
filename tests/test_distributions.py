@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
-from soaring_ctrw.distributions import Exponential, ParetoTail
+from distributions import Exponential, ParetoTail
 
 
 class TestParetoTail:

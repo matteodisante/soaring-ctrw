@@ -20,14 +20,13 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-
-from soaring_ctrw.model import (
+from model import (
     AngularConfig,
     PhaseConfig,
     SoaringConfig,
 )
-from soaring_ctrw.observables import fit_hurst, msd_ensemble
-from soaring_ctrw.simulation import simulate_ensemble
+from observables import fit_hurst, msd_ensemble
+from simulation import simulate_ensemble
 
 
 def h_eff(

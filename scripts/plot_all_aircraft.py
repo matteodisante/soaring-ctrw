@@ -17,9 +17,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from soaring_ctrw import SoaringConfig, simulate_ensemble, simulate_single
-from soaring_ctrw.observables import fit_hurst, msd_ensemble
-from soaring_ctrw.simulation import _interpolate_physical
+from model import SoaringConfig
+from simulation import simulate_ensemble, simulate_single, _interpolate_physical
+from observables import fit_hurst, msd_ensemble
 
 AIRCRAFT = ["paragliders", "hang_gliders", "sailplanes"]
 COLORS = {
@@ -58,7 +58,7 @@ def _simulate_all(n_trajectories: int, total_time: float, dt: float, seed: int):
         lags = np.arange(ens.shape[1]) * dt
         # Compute per-trajectory MSD (time-averaged), then ensemble
         # mean and standard error of the mean.
-        from soaring_ctrw.observables import msd_time_averaged
+        from observables import msd_time_averaged
         per_traj_msd = np.array(
             [msd_time_averaged(ens[i]) for i in range(ens.shape[0])]
         )

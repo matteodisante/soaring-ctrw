@@ -82,7 +82,7 @@ companion manuscripts.
 
 ```
 soaring-ctrw/
-├── src/soaring_ctrw/
+├── src/
 │   ├── distributions.py   # Pareto, Exponential, Mittag-Leffler samplers
 │   ├── model.py           # SoaringConfig, SearchMotionConfig, ClimbMotionConfig
 │   ├── simulation.py      # simulate_single, simulate_ensemble, intra-phase generators
@@ -92,7 +92,7 @@ soaring-ctrw/
 │   ├── hang_gliders.yaml
 │   └── sailplanes.yaml
 ├── scripts/
-│   ├── run_simulation.py         # single-aircraft MSD
+│   ├── run_simulation.py         # single-aircraft MSD (imports from top-level modules)
 │   ├── scan_phase_diagram.py     # (μ_T, σ_θ) phase diagram of H_eff
 │   ├── plot_all_aircraft.py      # full set of paper figures
 │   ├── plot_final_calibrated.py  # final MSD + local slope
@@ -100,13 +100,13 @@ soaring-ctrw/
 │   └── diagnose_local_slope.py   # diagnostic tool
 ├── tests/
 │   └── test_*.py
-├── paper/
+├── paper/                      # kept locally, not tracked by git
 │   ├── paper.tex,     paper.pdf       # long version
 │   ├── paper_prl.tex, paper_prl.pdf   # PRL-format letter
 │   ├── references.bib
 │   └── figures/*.pdf
 └── docs/
-    └── model.md
+  └── model.md
 ```
 
 ## Quickstart
@@ -117,6 +117,14 @@ pip install -e ".[dev]"
 
 # run a single-aircraft simulation and plot MSD
 python scripts/run_simulation.py --config configs/paragliders.yaml
+
+# Example imports (top-level modules under `src/`):
+python - <<'PY'
+from model import SoaringConfig
+from simulation import simulate_single
+from observables import msd_ensemble
+print(SoaringConfig)
+PY
 
 # produce all paper figures
 python scripts/plot_all_aircraft.py

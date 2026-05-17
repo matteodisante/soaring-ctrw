@@ -17,13 +17,9 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-
-from soaring_ctrw import (
-    SoaringConfig,
-    fit_hurst,
-    simulate_ensemble,
-)
-from soaring_ctrw.observables import msd_ensemble
+from model import SoaringConfig
+from observables import fit_hurst, msd_ensemble
+from simulation import simulate_ensemble
 
 
 def main() -> None:
