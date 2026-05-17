@@ -69,3 +69,6 @@ paper/figures/*.npz
 *.fdb_latexmk
 *.run.xml
 *-blx.bib
+
+# Keep local paper outputs
+paper/
