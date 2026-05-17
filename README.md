@@ -131,6 +131,22 @@ python scripts/plot_all_aircraft.py
 
 # run unit tests
 pytest
+
+## Note on imports and installation
+
+- The repository now exposes the core modules as top-level modules under `src/` (for example `model`, `simulation`, `distributions`, `observables`). To make them importable in your environment install the package in editable mode:
+
+```bash
+pip install -e .[dev]
+```
+
+- Alternatively, you can add `src/` to `PYTHONPATH` during development:
+
+```bash
+export PYTHONPATH=$PWD/src:$PYTHONPATH
+```
+
+- Legacy package `src/soaring_ctrw/` was removed; update old imports like `from soaring_ctrw.simulation import ...` to `from simulation import ...`. If you need backwards compatibility, create a small shim `soaring_ctrw.py` that re-exports the public API.
 ```
 
 ## Status
