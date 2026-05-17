@@ -9,13 +9,7 @@ universal sub-ballistic transport scaling (Hurst exponent
 [[arXiv:2601.01293](https://arxiv.org/abs/2601.01293)] can be reproduced
 by a minimal 2-D CTRW in which elementary steps correspond to complete
 transition→search→climb cycles and successive heading directions are
-correlated through a Gaussian random walk on the circle. Two manuscript
-versions are bundled:
-
-- `paper/paper.pdf` — long version (22 pages) with full derivation,
-  Monte Carlo benchmarks and phase diagram.
-- `paper/paper_prl.pdf` — letter version (7 pages) targeting PRL
-  formatting, with the same scientific content compressed.
+correlated through a Gaussian random walk on the circle. 
 
 ## Scientific motivation
 
@@ -100,13 +94,9 @@ soaring-ctrw/
 │   └── diagnose_local_slope.py   # diagnostic tool
 ├── tests/
 │   └── test_*.py
-├── paper/                      # kept locally, not tracked by git
-│   ├── paper.tex,     paper.pdf       # long version
-│   ├── paper_prl.tex, paper_prl.pdf   # PRL-format letter
-│   ├── references.bib
-│   └── figures/*.pdf
+├── paper/                      # manuscripts kept locally (not tracked)
 └── docs/
-  └── model.md
+    └── model.md
 ```
 
 ## Quickstart
@@ -131,13 +121,14 @@ python scripts/plot_all_aircraft.py
 
 # run unit tests
 pytest
+```
 
 ## Note on imports and installation
 
 - The repository now exposes the core modules as top-level modules under `src/` (for example `model`, `simulation`, `distributions`, `observables`). To make them importable in your environment install the package in editable mode:
 
 ```bash
-pip install -e .[dev]
+pip install -e ".[dev]"
 ```
 
 - Alternatively, you can add `src/` to `PYTHONPATH` during development:
@@ -147,7 +138,6 @@ export PYTHONPATH=$PWD/src:$PYTHONPATH
 ```
 
 - Legacy package `src/soaring_ctrw/` was removed; update old imports like `from soaring_ctrw.simulation import ...` to `from simulation import ...`. If you need backwards compatibility, create a small shim `soaring_ctrw.py` that re-exports the public API.
-```
 
 ## Status
 
@@ -202,8 +192,6 @@ The universal collapse $\delta^2(\Delta)/v_{xy}^2 = $ universal of
 the rescaled MSDs (inset of Fig. 1 of Vilpellet) is verified in the
 paper figures.
 
-The companion manuscripts are in `paper/paper.pdf` (long) and
-`paper/paper_prl.pdf` (letter).
 
 ## References
 
