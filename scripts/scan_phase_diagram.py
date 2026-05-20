@@ -28,6 +28,8 @@ from model import (
 from observables import fit_hurst, msd_ensemble
 from simulation import simulate_ensemble
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 def h_eff(
     mu_T: float,
@@ -77,7 +79,7 @@ def main() -> None:
     parser.add_argument("--total-time", type=float, default=3600.0)
     parser.add_argument("--dt", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "outputs")
     args = parser.parse_args()
 
     mu_grid = np.linspace(args.mu_min, args.mu_max, args.n_mu)

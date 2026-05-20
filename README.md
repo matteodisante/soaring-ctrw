@@ -43,7 +43,7 @@ explicit and quantifies their joint role.
 
 Each soaring cycle *n* consists of a transition, a search, and a climb
 phase with durations $(\tau^T_n,\tau^S_n,\tau^C_n)$ drawn from the
-prescribed heavy-tailed (Pareto/Mittag-Leffler) and exponential
+prescribed heavy-tailed (Lomax/Mittag-Leffler) and exponential
 distributions. The transition contributes a persistent ballistic step
 
 $$\mathbf{x}_n^T = \mathbf{x}_{n-1}^T + v_{xy}\, \tau^{\mathrm{T}}_n \hat{\mathbf{e}}(\theta_n),
@@ -77,7 +77,7 @@ companion manuscripts.
 ```
 soaring-ctrw/
 ├── src/
-│   ├── distributions.py   # Pareto, Exponential, Mittag-Leffler samplers
+│   ├── distributions.py   # Lomax, Exponential, Mittag-Leffler samplers
 │   ├── model.py           # SoaringConfig, SearchMotionConfig, ClimbMotionConfig
 │   ├── simulation.py      # simulate_single, simulate_ensemble, intra-phase generators
 │   └── observables.py     # time-averaged MSD, Hurst-exponent fit
@@ -146,7 +146,7 @@ aircraft: it is set analytically by the phase diagram, on which the
 $H_{\rm eff}=0.88$ iso-contour of the bare-cycle MSD becomes nearly
 horizontal in $(\mu_T,\sigma_\theta)$ and crosses σ_θ ≃ 0.35
 essentially independently of μ_T. With σ_θ frozen at this universal
-value and the hang-glider / sailplane Pareto scales tuned only to
+value and the hang-glider / sailplane Lomax scales tuned only to
 match the paraglider mean cycle duration
 $\langle T\rangle \approx 415$ s (the condition that collapses
 $\delta^2/v_{xy}^2$ onto a single master curve), the full Monte

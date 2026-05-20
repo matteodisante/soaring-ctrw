@@ -5,9 +5,9 @@ survival function S(τ) = P(T > τ) ~ τ^{-μ} of the three phase durations.
 Transition and search phases are well fitted by Pareto-like tails, while
 climb phases are consistent with exponential distributions (Fig. 4i).
 
-We provide minimal, explicitly tested samplers for these two families.
-More general distributions (Mittag-Leffler, truncated Pareto with
-arbitrary lower cutoff) can be added when needed.
+We provide minimal, explicitly tested samplers for these families.
+More general distributions (Mittag-Leffler, Lomax, truncated Pareto
+with arbitrary lower cutoff) can be added when needed.
 
 Notation
 --------
@@ -27,6 +27,7 @@ from scipy import stats
 
 __all__ = [
     "ParetoTail",
+    "LomaxTail",
     "Exponential",
     "MittagLeffler",
     "WaitingTimeSampler",
@@ -94,6 +95,54 @@ class ParetoTail(WaitingTimeSampler):
         """Draw ``size`` i.i.d. samples."""
         return stats.pareto.rvs(
             b=self.mu, scale=self.tau_min, size=size, random_state=rng
+        )
+
+
+@dataclass(frozen=True)
+class LomaxTail(WaitingTimeSampler):
+    r"""Lomax distribution with tail exponent ``mu`` and scale ``tau_0``.
+
+    Density:
+        f(τ) = (μ / τ_0) · (1 + τ/τ_0)^{-(μ+1)},  τ ≥ 0.
+    Survival:
+        S(τ) = (1 + τ/τ_0)^{-μ}.
+
+    The mean exists only for μ > 1 (``τ_0 / (μ−1)``) and the variance
+    only for μ > 2.
+
+    Parameters
+    ----------
+    mu : float
+        Tail exponent. Must be positive.
+    tau_0 : float
+        Scale parameter. Must be positive.
+    """
+
+    mu: float
+    tau_0: float
+
+    def __post_init__(self) -> None:
+        if self.mu <= 0:
+            raise ValueError(f"mu must be positive, got {self.mu}")
+        if self.tau_0 <= 0:
+            raise ValueError(f"tau_0 must be positive, got {self.tau_0}")
+
+    @property
+    def mean(self) -> float:
+        if self.mu <= 1:
+            return float("inf")
+        return self.tau_0 / (self.mu - 1)
+
+    @property
+    def variance(self) -> float:
+        if self.mu <= 2:
+            return float("inf")
+        return self.tau_0**2 * self.mu / ((self.mu - 1) ** 2 * (self.mu - 2))
+
+    def sample(self, size: int, rng: np.random.Generator) -> np.ndarray:
+        """Draw ``size`` i.i.d. samples."""
+        return stats.lomax.rvs(
+            c=self.mu, scale=self.tau_0, size=size, random_state=rng
         )
 
 

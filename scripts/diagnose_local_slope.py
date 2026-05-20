@@ -33,6 +33,9 @@ from model import SoaringConfig
 from simulation import simulate_ensemble
 from observables import msd_ensemble
 
+ROOT = Path(__file__).resolve().parents[1]
+CONFIG_DIR = ROOT / "configs"
+
 
 def local_slope(
     lags: np.ndarray,
@@ -79,7 +82,7 @@ def main() -> None:
     parser.add_argument("--dt", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--window-decades", type=float, default=0.3)
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "outputs")
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -97,7 +100,7 @@ def main() -> None:
     lag_cutoff = args.total_time / 2
 
     for name in aircraft:
-        cfg = SoaringConfig.from_yaml(f"configs/{name}.yaml")
+        cfg = SoaringConfig.from_yaml(CONFIG_DIR / f"{name}.yaml")
         print(
             f"Simulating {name}: {args.n_trajectories} trajectories "
             f"of {args.total_time:.0f} s each..."
@@ -145,7 +148,7 @@ def main() -> None:
     # Read sigma_theta from the paragliders config (identical across yamls
     # by design of the universality argument).
     sigma_theta_display = SoaringConfig.from_yaml(
-        "configs/paragliders.yaml"
+        CONFIG_DIR / "paragliders.yaml"
     ).angular.sigma_theta
     ax_msd.set_title(
         "Step-based CTRW: time-lag MSD and local scaling exponent\n"

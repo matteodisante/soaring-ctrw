@@ -40,6 +40,7 @@ import yaml
 
 from distributions import (
     Exponential,
+    LomaxTail,
     MittagLeffler,
     ParetoTail,
     WaitingTimeSampler,
@@ -59,10 +60,12 @@ class PhaseConfig:
     Attributes
     ----------
     distribution : str
-        One of ``"pareto"``, ``"mittag_leffler"``, or ``"exponential"``.
+        One of ``"pareto"``, ``"lomax"``, ``"mittag_leffler"``, or
+        ``"exponential"``.
     params : dict
         Distribution-specific parameters. For ``pareto``:
-        ``{"mu": float, "tau_min": float}``. For ``mittag_leffler``:
+        ``{"mu": float, "tau_min": float}``. For ``lomax``:
+        ``{"mu": float, "tau_0": float}``. For ``mittag_leffler``:
         ``{"alpha": float, "tau_0": float}``. For ``exponential``:
         ``{"tau_mean": float}``.
 
@@ -85,6 +88,8 @@ class PhaseConfig:
         dist = self.distribution.lower()
         if dist == "pareto":
             return ParetoTail(**self.params)
+        if dist == "lomax":
+            return LomaxTail(**self.params)
         if dist == "mittag_leffler":
             # Map the tail-exponent parameter "alpha" of the ML to our
             # sampler, and enforce that the stability index is at most 1.
@@ -104,7 +109,7 @@ class PhaseConfig:
             return Exponential(**self.params)
         raise ValueError(
             f"Unknown phase distribution {self.distribution!r}. "
-            "Expected one of: 'pareto', 'mittag_leffler', 'exponential'."
+            "Expected one of: 'pareto', 'lomax', 'mittag_leffler', 'exponential'."
         )
 
 
@@ -155,7 +160,7 @@ class SearchMotionConfig:
     Based on Vilpellet et al. (2026, Fig. 3), the conditional MSD of the
     search phase exhibits a ballistic regime at short lags (slope 2) and
     a sub-diffusive tail :math:`\\Delta^{\\alpha_S}` at longer lags with
-    :math:`\\alpha_S \in (0, 1)`.
+    :math:`\\alpha_S \\in (0, 1)`.
 
     We implement this as a **subordinated Lévy walk** (Fogedby 1994;
     Magdziarz-Weron 2007): inside each search phase of total duration

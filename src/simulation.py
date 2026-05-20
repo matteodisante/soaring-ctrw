@@ -325,7 +325,7 @@ def _search_endpoint(
 def _fbm_covariance(times: np.ndarray, H: float, sigma: float) -> np.ndarray:
     r"""Covariance matrix of 1-D fractional Brownian motion sampled at ``times``.
 
-    For fBm :math:`B_H(t)` with Hurst index :math:`H \in (0,1)` and
+    For fBm :math:`B_H(t)` with Hurst index :math:`H \\in (0,1)` and
     scaling :math:`\sigma`, the covariance is
 
     .. math::

@@ -28,6 +28,9 @@ from model import SoaringConfig
 from simulation import simulate_ensemble
 from observables import msd_ensemble
 
+ROOT = Path(__file__).resolve().parents[1]
+CONFIG_DIR = ROOT / "configs"
+
 
 def local_slope(
     lags: np.ndarray,
@@ -54,7 +57,7 @@ def main() -> None:
     parser.add_argument("--n-trajectories", type=int, default=400)
     parser.add_argument("--total-time", type=float, default=10_000.0)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "outputs")
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -70,7 +73,7 @@ def main() -> None:
     lag_cutoff = args.total_time / 2
 
     for name in aircraft:
-        cfg = SoaringConfig.from_yaml(f"configs/{name}.yaml")
+        cfg = SoaringConfig.from_yaml(CONFIG_DIR / f"{name}.yaml")
         ens = simulate_ensemble(
             config=cfg,
             n_trajectories=args.n_trajectories,

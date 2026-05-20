@@ -112,8 +112,8 @@ class TestYamlLoading:
         data = {
             "name": "test_aircraft",
             "v_xy": 12.0,
-            "transition": {"distribution": "pareto", "params": {"mu": 3.0, "tau_min": 20.0}},
-            "search": {"distribution": "pareto", "params": {"mu": 2.5, "tau_min": 10.0}},
+            "transition": {"distribution": "lomax", "params": {"mu": 3.0, "tau_0": 20.0}},
+            "search": {"distribution": "lomax", "params": {"mu": 2.5, "tau_0": 10.0}},
             "climb": {"distribution": "exponential", "params": {"tau_mean": 100.0}},
             "angular": {"sigma_theta": 0.4, "theta0": 0.0},
         }
@@ -124,4 +124,5 @@ class TestYamlLoading:
         assert config.name == "test_aircraft"
         assert config.v_xy == 12.0
         assert config.transition.params["mu"] == 3.0
+        assert config.transition.params["tau_0"] == 20.0
         assert config.angular.sigma_theta == 0.4

@@ -21,6 +21,8 @@ from model import SoaringConfig
 from observables import fit_hurst, msd_ensemble
 from simulation import simulate_ensemble
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -57,12 +59,13 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("outputs"),
+        default=ROOT / "outputs",
         help="Output directory (default: ./outputs).",
     )
     args = parser.parse_args()
 
-    config = SoaringConfig.from_yaml(args.config)
+    config_path = args.config if args.config.is_absolute() else ROOT / args.config
+    config = SoaringConfig.from_yaml(config_path)
     rng = np.random.default_rng(args.seed)
 
     print(f"Simulating {config.name}:")

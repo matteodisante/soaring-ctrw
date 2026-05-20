@@ -21,6 +21,9 @@ from model import SoaringConfig
 from simulation import simulate_ensemble
 from observables import msd_ensemble, fit_hurst
 
+ROOT = Path(__file__).resolve().parents[1]
+CONFIG_DIR = ROOT / "configs"
+
 
 def local_slope(lags: np.ndarray, msd: np.ndarray, window_decades: float = 0.3) -> np.ndarray:
     log_lags = np.log(lags)
@@ -43,7 +46,7 @@ def main() -> None:
     p.add_argument("--n-trajectories", type=int, default=300)
     p.add_argument("--total-time", type=float, default=10_000.0)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--output-dir", type=Path, default=Path("outputs"))
+    p.add_argument("--output-dir", type=Path, default=ROOT / "outputs")
     args = p.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -58,7 +61,7 @@ def main() -> None:
     rng = np.random.default_rng(args.seed)
     results = {}
     for name in aircraft:
-        cfg = SoaringConfig.from_yaml(f"configs/{name}.yaml")
+        cfg = SoaringConfig.from_yaml(CONFIG_DIR / f"{name}.yaml")
         print(f"Simulating {name}...")
         ens = simulate_ensemble(
             config=cfg, n_trajectories=args.n_trajectories,

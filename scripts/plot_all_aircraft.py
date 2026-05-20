@@ -28,6 +28,8 @@ COLORS = {
     "sailplanes": "#6a3d9a",
 }
 MARKERS = {"paragliders": "o", "hang_gliders": "*", "sailplanes": "D"}
+ROOT = Path(__file__).resolve().parents[1]
+CONFIG_DIR = ROOT / "configs"
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +47,7 @@ def _simulate_all(n_trajectories: int, total_time: float, dt: float, seed: int):
     rng = np.random.default_rng(seed)
     results = {}
     for name in AIRCRAFT:
-        cfg = SoaringConfig.from_yaml(f"configs/{name}.yaml")
+        cfg = SoaringConfig.from_yaml(CONFIG_DIR / f"{name}.yaml")
         print(f"  Simulating {name}: {n_trajectories} trajectories of "
               f"{total_time:.0f} s each...")
         ens = simulate_ensemble(
@@ -129,7 +131,7 @@ def plot_fig1_msd_all(results: dict, output_path: Path) -> None:
 
 
 def plot_fig2_trajectory(output_path: Path) -> None:
-    cfg = SoaringConfig.from_yaml("configs/paragliders.yaml")
+    cfg = SoaringConfig.from_yaml(CONFIG_DIR / "paragliders.yaml")
     rng = np.random.default_rng(7)
     # Simulate 6 cycles for a richer visual (~30 minutes of flight)
     traj = simulate_single(cfg, n_cycles=6, rng=rng)
@@ -314,7 +316,7 @@ def plot_fig3_msd_per_phase(output_path: Path, n_trajectories: int,
 
     for ax, name in zip(axes, AIRCRAFT):
         print(f"  Phase MSD for {name}...")
-        cfg = SoaringConfig.from_yaml(f"configs/{name}.yaml")
+        cfg = SoaringConfig.from_yaml(CONFIG_DIR / f"{name}.yaml")
         alpha_S = cfg.search_motion.alpha_S if cfg.search_motion else 0.6
 
         phase_msds = _collect_phase_segments(
@@ -414,7 +416,7 @@ def plot_fig6_single_cycle(output_path: Path) -> None:
     (~tens of m) and climb loops (~40 m), we add a zoomed inset on the
     end of the transition / search / climb region so that all three
     phases are legible on their native scales."""
-    cfg = SoaringConfig.from_yaml("configs/paragliders.yaml")
+    cfg = SoaringConfig.from_yaml(CONFIG_DIR / "paragliders.yaml")
     # Loop over seeds until we find a cycle with a visually clear search
     # cloud (tau^S long enough to host several ML jumps) and a distinct
     # climb (tau^C long enough to host several thermalling loops).
@@ -600,7 +602,7 @@ def plot_fig4_phase_statistics(output_path: Path,
 
     duration_data = {p: {} for p in ["T", "S", "C"]}
     for name in AIRCRAFT:
-        cfg = SoaringConfig.from_yaml(f"configs/{name}.yaml")
+        cfg = SoaringConfig.from_yaml(CONFIG_DIR / f"{name}.yaml")
         durs_T, durs_S, durs_C = [], [], []
         for _ in range(n_trajectories):
             traj = simulate_single(cfg, n_cycles=n_cycles_per_traj, rng=rng)
@@ -669,7 +671,7 @@ def main() -> None:
     parser.add_argument("--dt", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", type=Path,
-                        default=Path("paper/figures"))
+                        default=ROOT / "paper/figures")
     parser.add_argument("--skip", default="",
                         help="comma-separated list of figures to skip")
     args = parser.parse_args()
