@@ -1,55 +1,54 @@
+# Paraglider configuration -- Table 1 of the manuscript (Di Sante 2026).
+# All values are read from or derived from Vilpellet, Darmon & Benzaquen
+# (2026, arXiv:2601.01293) following the recipe in the Parameter
+# estimation section of the manuscript.
+#
+#   v_xy        = 10.06 m/s    (Fig. 4b, median horizontal speed)
+#   mu_T        = 3.93         (Fig. 4c, transition tail exponent)
+#   mu_S        = 3.88         (Fig. 4f, search    tail exponent)
+#   tau_0^T     = 700  s       (survival-function elbow, Fig. 4c)
+#   tau_0^S     = 200  s       (survival-function elbow, Fig. 4f)
+#   mu_C_eff    = 110  s       (climb-duration scale, Fig. 4i)
+#   alpha_S     = 0.6          (log-log slope of search MSD, Fig. 3a)
+#   tau_b^S     = 10   s       (MSD crossover lag, Fig. 3a)
+#   u_S         = 8.37 m/s     (short-lag ballistic speed,
+#                               u_S ≃ [delta_S^2(1 s)]^{1/2}/(1 s), paper Eq. 4)
+#   tau_turn^S  = 9.605 s      (Pillai-ML: pi/(2*Omega_S*m_{1/2}(0.6)),
+#                               m_{1/2}=0.6057 from calculate_mit.py)
+#   Omega_S     = 0.27 s^-1    (v_xy^25 / R_th^25, Fig. 4b/4h)
+#   r0          = 39.0 m       (Fig. 4h, median thermalling radius)
+#   T_turn_mean = 60 s
+#   T_turn_std  = 35 s         (climb MSD plateau, Fig. 3a)
+#   v_drift     = 1.9 m/s      (large-lag climb MSD slope, Fig. 3a)
+#   sigma_theta = 0.35 rad     (analytic universal value, phase diagram)
 name: paragliders
-# Vilpellet, Darmon & Benzaquen (2026), arXiv:2601.01293.
-# Vilpellet-derived empirical parameters (Table 1 of our paper):
-#   v_xy   = 10.06 m/s    (mean horizontal speed, Fig. 1 inset)
-#   mu_T   = 3.93         (Lomax exponent, transition, Fig. 4c)
-#   mu_S   = 3.88         (Lomax exponent, search,    Fig. 4c)
-#   mu_C   = 8.28         (Hill exponent, climb, not used in ML calibration)
-#   tau^C  ~ Exp(120 s)   (mean climb duration, Fig. 4c)
-# Only the paraglider search_motion / climb_motion blocks are calibrated
-# on Fig. 3 of [5]; hang gliders and sailplanes use generic modelling choices.
 v_xy: 10.06
 
 transition:
   distribution: lomax
-  params: {mu: 3.93, tau_0: 200.0}
+  params: {mu: 3.93, tau_0: 700.0}
 
 search:
   distribution: lomax
-  params: {mu: 3.88, tau_0: 150}
+  params: {mu: 3.88, tau_0: 200.0}
 
 climb:
   distribution: exponential
-  params: {tau_mean: 120.0}
+  params: {tau_mean: 110.0}
 
 angular:
-  sigma_theta: 0.35
-  theta0: 0.0
+  sigma_theta: null
+  theta0: null   # random uniform on [0, 2*pi) per trajectory
 
-# Search: subordinated Lévy walk.
-# Interpretation: the pilot in search mode does NOT stand still. The
-# waiting times model tight circling in place (radius ≪ r_0_climb,
-# period few s), during which horizontal net displacement on GPS
-# sampling scale appears as a pause. The "ballistic legs" model brief
-# tactical manoeuvres between candidate updraft spots, at effective
-# speed v_c_S larger than the overall cruise speed v_xy (the pilot
-# flies quickly during repositioning).
-# Three regimes in MSD_S:
-#   Δ << sigma_0:                       ballistic (intra-leg)
-#   sigma_0 << Δ << tau_0_S (= tau_w^S): transient
-#   Δ >> tau_w^S:                       sub-diffusive Δ^alpha_S
-# Note: the field name `tau_0_S` here is the *intra-phase* ML wait
-# scale (tau_w^S in the PRL paper), distinct from the Pareto scale
-# tau_min^S of the cycle-duration scheduler in the `search` block above.
 search_motion:
-  v_c_S: 10            # m/s, leg speed during fast tactical repositioning
-  sigma_0: 5           # s, exponential scale of leg durations
-  tau_0_S: 5           # s, ML scale of intra-phase waits (tau_w^S)
-  alpha_S: 0.6         # asymptotic sub-diffusive exponent (Vilpellet Fig. 3a,b)
-  sigma_psi_S: 20       # rad, per-leg heading-increment standard deviation
+  u_S: 8.37          # m/s   
+  tau_b_S: 10.0      # s
+  tau_turn_S: 9.605  # s    
+  alpha_S: 0.6
+  Omega_S: 0.27      # s^-1
 
 climb_motion:
-  thermal_radius: 50.0
-  turn_period: 60.0
-  turn_period_std: 35.0
-  v_drift: 1
+  r0: 39.0           # m
+  T_turn_mean: 40.0  # s
+  T_turn_std: 10.0   # s
+  v_drift: 1.9       # m/s
