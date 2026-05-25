@@ -1,211 +1,260 @@
 # soaring-ctrw
 
-A cycle-based Continuous-Time Random Walk (CTRW) model with angular
-persistence for cross-country soaring flights.
+A cycle-based continuous-time random walk (CTRW) model with angular
+persistence for cross-country soaring flights. Companion code for the
+manuscript *"A cycle-based model for the universal Hurst exponent in
+thermal soaring flights"* (Di Sante, 2026), which extends the empirical
+analysis of Vilpellet, Darmon & Benzaquen
+([arXiv:2601.01293](https://arxiv.org/abs/2601.01293), VDB hereafter).
 
-This repository accompanies a manuscript investigating how the
-universal sub-ballistic transport scaling (Hurst exponent
-*H* ≈ 0.88) reported by Vilpellet, Darmon & Benzaquen
-[[arXiv:2601.01293](https://arxiv.org/abs/2601.01293)] can be reproduced
-by a minimal 2-D CTRW in which elementary steps correspond to complete
-transition→search→climb cycles and successive heading directions are
-correlated through a Gaussian random walk on the circle. 
+## Model in one screen
 
-## Scientific motivation
+A flight is a renewal sequence of soaring **cycles**. Each cycle has
+three phases — *transition* T, *search* S, *climb* C — with i.i.d.
+phase-duration scheduler
 
-The empirical paper of Vilpellet et al. (2026) reports a robust
-*H* ≈ 0.88 across paragliders, hang gliders and sailplanes despite
-large differences in characteristic speed, glide ratio and heavy-tail
-exponents of the phase durations. The paper adopts throughout the
-*survival convention* $P(\tau>t)\sim t^{-\mu}$ used by Vilpellet's
-Hill estimator. In this convention the coupled Lévy-walk prediction
-for the MSD is $\delta^2\sim\Delta^{3-\mu_T}$, valid only for
-$1<\mu_T<2$; the density-convention form $\Delta^{4-\mu_T}$ valid
-for $2<\mu_T<3$ that appears in Vilpellet's Discussion is the same
-physical scaling relabelled via $\mu_{\rm density}=\mu_{\rm survival}+1$,
-not a separate prediction. Vilpellet's Hill-estimator values
-μ_T ≈ 3.93, 4.79, 2.62 all sit *above* 2 in survival convention:
-transition durations have finite second moment, the Lévy-walk
-asymptotic regime never sets in, and the naive prediction collapses
-to plain diffusion (*H* = 1/2), incompatible with the observed
-*H* ≈ 0.88. The discrepancy points to two missing ingredients:
+- Transition and search: Lomax,
+  ``P(τ > τ) = (1 + τ / τ_0)^{-μ}``.
+- Climb: exponential,
+  ``P(τ > τ) = exp(-τ / μ_C^eff)``.
 
-1. **Two-dimensional directional decorrelation** between successive
-   ballistic segments.
-2. **Pre-asymptotic crossover** between ballistic ($N\!\ll\!N_p$) and
-   diffusive ($N\!\gg\!N_p$) regimes over the finite observation
-   window 10¹–10³ s.
+The transition phase carries the heading from cycle to cycle through a
+Gaussian random walk on the circle,
+``θ_n = θ_{n-1} + η_n``, ``η_n ~ 𝒩(0, σ_θ²)``. The initial
+``θ_0`` of each independent trajectory is uniform on ``[0, 2π)``.
 
-This repository implements the minimal model that makes both effects
-explicit and quantifies their joint role.
+Intra-phase dynamics:
 
-## Model summary
+- **Search** is a local CTRW with physical-duration stopping: ballistic
+  legs of speed ``u_S`` and exponential duration ``τ_b ~ Exp(τ_b^S)``,
+  interleaved with Mittag-Leffler turning waits
+  ``τ_turn ~ ML(α_S, τ_turn^S)``. The direction is updated, after a
+  fully completed wait, by
+  ``ψ_{j+1} = ψ_j + ε_j · Ω_S · τ_turn_j``, ``ε_j = ±1``. The local
+  CTRW stops when the cumulative *physical* time (legs + waits)
+  reaches the Lomax-sampled search duration ``τ_S^n``; whichever
+  component straddles ``τ_S^n`` is truncated, so the search physical
+  duration is ``T_phys^S = Σ τ_b + Σ τ_turn = τ_S^n`` exactly.
+- **Climb** is circular motion at radius ``r_0`` with per-cycle turn
+  period ``T_turn_n ~ 𝒩(T_turn_mean, T_turn_std²)`` (clipped at
+  ``0.2 · T_turn_mean``) plus a slow orographic drift ``v_drift`` with
+  an independent uniform direction per cycle.
 
-Each soaring cycle *n* consists of a transition, a search, and a climb
-phase with durations $(\tau^T_n,\tau^S_n,\tau^C_n)$ drawn from the
-prescribed heavy-tailed (Lomax/Mittag-Leffler) and exponential
-distributions. The transition contributes a persistent ballistic step
-
-$$\mathbf{x}_n^T = \mathbf{x}_{n-1}^T + v_{xy}\, \tau^{\mathrm{T}}_n \hat{\mathbf{e}}(\theta_n),
-\qquad \theta_n = \theta_{n-1} + \eta_n,\quad \eta_n \sim \mathcal{N}(0, \sigma_\theta^2).$$
-
-Search and climb phases each contribute a non-trivial intra-phase
-displacement, calibrated against Fig. 3 of Vilpellet et al.:
-
-- **Search** — subordinated Lévy walk: ballistic legs at speed $v_c^S$
-  with exponential durations $\sigma_0$, alternating with stationary
-  Mittag-Leffler waits of exponent $\alpha_S\!\in\!(0,1)$ and scale
-  $\tau_w^S$. Reproduces ballistic → sub-diffusive
-  $\Delta^{\alpha_S}$ crossover.
-- **Climb** — 2-D harmonic oscillator (pilot circling a thermal at
-  radius $r_0$ with mean turn period $\bar T_{\rm turn}$, dispersion
-  $\sigma_T$) plus a linear orographic drift of magnitude
-  $v_{\rm drift}$. Gaussian damping of the period dispersion smears
-  the anti-correlation dip when $\sigma_T\bar\omega_0 \gtrsim 1$.
-
-Per-cycle leg directions are i.i.d. uniform on the circle, independent
-of the transition heading. The angular diffusivity $\sigma_\theta^2$
-is the single phenomenological parameter introduced beyond what the
-data fix; it sets the persistence length
-$N_p = 2/\sigma_\theta^2$ in cycles.
-
-Analytical predictions are worked out in `docs/model.md` and the
-companion manuscripts.
+The single phenomenological parameter introduced beyond what the data
+fix is the cycle-to-cycle heading dispersion ``σ_θ``. The manuscript
+shows that the iso-contour ``H_eff = 0.88`` is pinned at a common
+``σ_θ`` essentially independently of the aircraft-specific
+``μ_T`` — this is the analytical origin of the empirical universality
+``H ≈ 0.88``.
 
 ## Repository layout
 
 ```
 soaring-ctrw/
 ├── src/
-│   ├── distributions.py   # Lomax, Exponential, Mittag-Leffler samplers
-│   ├── model.py           # SoaringConfig, SearchMotionConfig, ClimbMotionConfig
-│   ├── simulation.py      # simulate_single, simulate_ensemble, intra-phase generators
-│   └── observables.py     # time-averaged MSD, Hurst-exponent fit
+│   ├── distributions.py   # Pareto, Lomax, Exponential, Mittag-Leffler
+│   ├── model.py           # SoaringConfig, SearchMotionConfig, ClimbMotionConfig, ...
+│   ├── simulation.py      # simulate_single, simulate_ensemble, interpolate_trajectory
+│   ├── observables.py     # time-averaged MSD (FFT), Hurst-exponent fit
+│   ├── calibration.py     # read/write outputs/data/calibration/<aircraft>.yaml; apply_calibration
+│   ├── cache.py           # script-side NPZ + manifest cache for Monte-Carlo runs
+│   └── paths.py           # repo-relative output paths
 ├── configs/
-│   ├── paragliders.yaml
+│   ├── paragliders.yaml   # Table 1 of the manuscript
 │   ├── hang_gliders.yaml
 │   └── sailplanes.yaml
 ├── scripts/
-│   ├── run_simulation.py         # single-aircraft MSD (imports from top-level modules)
-│   ├── scan_phase_diagram.py     # (μ_T, σ_θ) phase diagram of H_eff
-│   ├── plot_all_aircraft.py      # full set of paper figures
-│   ├── plot_final_calibrated.py  # final MSD + local slope
-│   ├── compare_to_empirical.py   # diagnostic local-slope comparison
-│   └── diagnose_local_slope.py   # diagnostic tool
-├── tests/
-│   └── test_*.py
-├── paper/                      # manuscripts kept locally (not tracked)
-└── docs/
-    └── model.md
+│   ├── compute_ml_median_and_tau_turn.py  # m_{1/2}(α) and τ_turn^S = (π/2)/(Ω_S·m_{1/2})
+│   ├── estimate_sigma_theta.py            # 1-D scan H_eff(σ_θ); finds σ_θ⋆ at H=0.88
+│   ├── compute_critical_time.py           # crossover time t_c = 2⟨T⟩/σ_θ² from calibrated σ_θ
+│   ├── plot_per_phase_msd.py              # 3-panel per-phase EA-MSD with log-log fits
+│   ├── plot_msd_all_aircraft.py           # MSD overlay + local-slope panel + rescaled MSD
+│   ├── compare_msd_to_theory.py           # simulated MSD vs paper Eqs. 10, 11, 23, 26
+│   ├── plot_trajectory.py                 # 2×2 sample-trajectory figure (uniform square axes)
+│   └── plot_phase_durations.py            # analytic CCDF panels (transition / search / climb)
+├── tests/                       # pytest suite
+├── outputs/                     # all script outputs land here
+│   ├── figures/
+│   └── data/
+├── paper/                       # manuscript and figures used by the .tex
+└── pyproject.toml
 ```
 
-## Quickstart
+Every script writes its artefacts under ``outputs/`` (figures as PDF
+or PNG under ``outputs/figures/``, numerical arrays as NPZ under
+``outputs/data/``). The default paths can be overridden with
+``--figures-dir`` and ``--data-dir``.
+
+## Installation
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-
-# run a single-aircraft simulation and plot MSD
-python scripts/run_simulation.py --config configs/paragliders.yaml
-
-# Example imports (top-level modules under `src/`):
-python - <<'PY'
-from model import SoaringConfig
-from simulation import simulate_single
-from observables import msd_ensemble
-print(SoaringConfig)
-PY
-
-# produce all paper figures
-python scripts/plot_all_aircraft.py
-
-# run unit tests
-pytest
 ```
 
-## Note on imports and installation
+The package exposes its modules at the top level (``model``,
+``simulation``, ``distributions``, ``observables``, ``paths``), so
+``from model import SoaringConfig`` works out of the box once
+installed in editable mode.
 
-- The repository now exposes the core modules as top-level modules under `src/` (for example `model`, `simulation`, `distributions`, `observables`). To make them importable in your environment install the package in editable mode:
+## Reproducing the figures
+
+### Recommended run order
+
+All scripts can be invoked independently, but several depend on
+artefacts produced by others. The end-to-end pipeline that reproduces
+every figure of the manuscript is:
+
+1. **Search-phase calibration** — compute `m_{1/2}(α_S)` and the
+   calibrated `τ_turn^S`. With `--write` they are merged into
+   `outputs/data/calibration/<aircraft>.yaml` under the
+   `mittag_leffler` section:
+   ```bash
+   python scripts/compute_ml_median_and_tau_turn.py --write
+   ```
+
+2. **Per-phase MSD** — 3-panel EA-MSD figure with log-log fits and
+   per-aircraft MSD `.npz` files used by step 5 below:
+   ```bash
+   python scripts/plot_per_phase_msd.py
+   ```
+
+3. **σ_θ calibration** — 1-D scan against the empirical
+   `H_eff = 0.88`; with `--write` the full-cycle `σ_θ⋆` is merged
+   into the `sigma_theta` section of the calibration YAML:
+   ```bash
+   python scripts/estimate_sigma_theta.py \
+       --n-sigma 16 --n-trajectories 1000 --total-time 15000 \
+       --fit-min 10 --fit-max 7000 --write
+   ```
+
+4. **Pre-asymptotic crossover time** — reads the calibrated
+   `σ_θ` (full-cycle) from step 3 and the mean cycle duration
+   `⟨T⟩ = ⟨τ_T⟩ + ⟨τ_S⟩ + ⟨τ_C⟩` from `configs/<aircraft>.yaml`,
+   prints the breakdown, and (with `--write`) merges the result into
+   the `critical_time` section:
+   ```bash
+   python scripts/compute_critical_time.py --write
+   ```
+
+5. **Final figures** — simulation MSDs vs theory, MSD overlay,
+   trajectories, phase-duration CCDFs:
+   ```bash
+   python scripts/plot_msd_all_aircraft.py
+   python scripts/compare_msd_to_theory.py
+   python scripts/plot_trajectory.py
+   python scripts/plot_phase_durations.py
+   ```
+
+The `configs/<aircraft>.yaml` files keep `angular.sigma_theta: null`;
+any script that needs `σ_θ` reads it from
+`outputs/data/calibration/<aircraft>.yaml` via
+`src/calibration.py::apply_calibration` (no manual promotion step is
+required). All per-aircraft derived quantities (`σ_θ⋆`,
+`tau_turn_calibrated`, `m_{1/2}(α)`, `t_c`, …) live in that single
+YAML; sections are merged in place by `write_calibration_section`, so
+successive runs of different calibrators never overwrite each other.
+
+### Individual commands
+
+Calibrate the cycle-to-cycle heading dispersion σ_θ (1-D scan against
+the empirical H_eff = 0.88):
 
 ```bash
-pip install -e ".[dev]"
+python scripts/estimate_sigma_theta.py \
+    --n-sigma 16 --n-trajectories 1000 --total-time 15000 \
+    --fit-min 10 --fit-max 7000
 ```
 
-- Alternatively, you can add `src/` to `PYTHONPATH` during development:
+This populates ``outputs/figures/estimate_sigma_theta_*_overlay.pdf``
+(one overlay per aircraft with the bare- and full-cycle
+``H_eff(σ_θ)`` curves) and caches the scan in
+``outputs/data/estimate_sigma_theta/*.npz``. Add ``--cache reuse`` to
+reuse a cached scan instead of re-running the Monte Carlo. Without
+``--write`` only the figures + cache are produced; ``σ_θ⋆`` is
+printed to stdout/log but not persisted.
+
+Quick stand-alone table of `m_{1/2}(α)` and the calibrated
+`τ_turn^S = (π/2) / (Ω_S · m_{1/2}(α_S))`:
 
 ```bash
-export PYTHONPATH=$PWD/src:$PYTHONPATH
+python scripts/compute_ml_median_and_tau_turn.py
 ```
 
-- Legacy package `src/soaring_ctrw/` was removed; update old imports like `from soaring_ctrw.simulation import ...` to `from simulation import ...`. If you need backwards compatibility, create a small shim `soaring_ctrw.py` that re-exports the public API.
+Pre-asymptotic crossover time `t_c = 2⟨T⟩/σ_θ²` (requires step 3
+to have been run with `--write`):
 
-## Status
+```bash
+python scripts/compute_critical_time.py --write
+```
 
-The angular diffusivity σ_θ = 0.35 rad is *not* fitted aircraft by
-aircraft: it is set analytically by the phase diagram, on which the
-$H_{\rm eff}=0.88$ iso-contour of the bare-cycle MSD becomes nearly
-horizontal in $(\mu_T,\sigma_\theta)$ and crosses σ_θ ≃ 0.35
-essentially independently of μ_T. With σ_θ frozen at this universal
-value and the hang-glider / sailplane Lomax scales tuned only to
-match the paraglider mean cycle duration
-$\langle T\rangle \approx 415$ s (the condition that collapses
-$\delta^2/v_{xy}^2$ onto a single master curve), the full Monte
-Carlo produces a tight cluster of fitted Hurst exponents on the
-observation window 10 s < Δ < 5×10³ s:
+This also prints the per-phase mean durations
+`⟨τ_T⟩, ⟨τ_S⟩, ⟨τ_C⟩`, the mean cycle duration `⟨T⟩`, and the
+number-of-cycles crossover `n_c = 2/σ_θ²`, all of which are stored
+in the `critical_time` section of the calibration YAML.
 
-| aircraft      | μ_T (transition) | $\langle T\rangle$ (s) | H fitted |
-|---------------|:----------------:|:----------------------:|:--------:|
-| paragliders   |       3.93       |         415.2          |  0.934   |
-| hang gliders  |       4.79       |         414.9          |  0.930   |
-| sailplanes    |       2.62       |         415.3          |  0.937   |
+The per-phase MSD figures (3-panel, one column per aircraft) are
+reproduced with
 
-The aircraft-to-aircraft spread is $|\Delta H|\lesssim 0.01$ across
-a factor ≈ 3.6 in horizontal speed and a factor ≈ 1.8 in the
-transition tail exponent — this is the universality the paper aims
-to explain. The cluster sits ≈ 0.05 above the empirical *H* ≈ 0.88;
-the discussion section of the paper documents this slight
-over-prediction and identifies it as the limitation set by treating
-the cycle-step model with $\sigma_\theta$ pinned analytically rather
-than fitted.
+```bash
+python scripts/plot_per_phase_msd.py
+```
 
-The model reproduces both Fig. 1 (total MSD) and Fig. 3 (conditional
-per-phase MSD) of Vilpellet et al. (2026):
+The combined MSD comparison across aircraft (overlay + local-slope
+sub-panel + rescaled-by-v_xy² figure with power-law fits over
+``[10, 7000]`` s) is reproduced with
 
-- **Transition**: persistent ballistic at all lags, by construction.
-- **Search**: subordinated Lévy walk (Fogedby 1994; Magdziarz–Weron
-  2007) — alternating ballistic tactical-repositioning legs (mean
-  duration σ_0, speed v_c^S) with Mittag-Leffler tight-circling
-  waits (scale τ_w^S, exponent α_S = 0.6 for paragliders/hang
-  gliders, 0.4 for sailplanes). The pilot is never at rest — the
-  "waiting times" represent localised circling at a radius well
-  below the GPS resolution, which appears as a pause in the
-  xy-projection. Reproduces ballistic → sub-diffusive Δ^α_S
-  crossover asymptotically.
-- **Climb**: 2-D harmonic oscillator (pilot circling a thermal at
-  radius r_0 ≈ 50/58/130 m with mean turn period
-  $\bar T_{\rm turn}$ and dispersion σ_T) plus a linear orographic
-  drift v_drift. Reproduces the three regimes of Fig. 3 of
-  Vilpellet et al.: ballistic at short Δ, anti-correlation /
-  saturation at intermediate Δ, quasi-ballistic drift tail.
+```bash
+python scripts/plot_msd_all_aircraft.py
+```
 
-The universal collapse $\delta^2(\Delta)/v_{xy}^2 = $ universal of
-the rescaled MSDs (inset of Fig. 1 of Vilpellet) is verified in the
-paper figures.
+The four side-by-side comparisons between simulated MSDs and the
+closed-form expressions of the manuscript (Eq. 10 for the search
+MSD, Eq. 11 for the climb MSD, Eq. 23 for the cycle-counted MSD,
+and Eq. 26 for the local Hurst exponent `H_eff(N)`) are produced by
 
+```bash
+python scripts/compare_msd_to_theory.py
+```
+
+It reads the per-phase MSD cache (step 2) and the calibrated
+`σ_θ` (step 3) and runs a small live cycle-counted simulation for
+the last two panels.
+
+The sample-trajectory figure (2×2 panel with all four sub-plots
+rendered as identical squares) is reproduced with
+
+```bash
+python scripts/plot_trajectory.py
+```
+
+The analytic phase-duration CCDFs of Fig. 2 of the manuscript come from
+
+```bash
+python scripts/plot_phase_durations.py
+```
+
+## Tests
+
+```bash
+pytest -q
+```
+
+The suite checks the configuration loading, the search-phase
+invariants (``T_phys^S = Σ τ_b + Σ τ_turn = τ_S^n`` in full mode and
+``T_phys^S = τ_S^n`` in bare mode), the ``σ_θ = 0`` straight-line
+limit of the transition, the ensemble-averaged MSD on synthetic
+ballistic and diffusive trajectories, and the recovery of analytic
+Hurst exponents on synthetic power-law MSDs.
 
 ## References
 
 - J. Vilpellet, A. Darmon, M. Benzaquen, *From Random Walks to Thermal
   Rides: Universal Anomalous Transport in Soaring Flights*,
   [arXiv:2601.01293](https://arxiv.org/abs/2601.01293) (2026).
-- R. Metzler, J. Klafter, *The Random Walk's Guide to Anomalous
-  Diffusion: A Fractional Dynamics Approach*, Phys. Rep. 339, 1 (2000).
-- V. Zaburdaev, S. Denisov, J. Klafter, *Lévy Walks*, Rev. Mod. Phys.
-  87, 483 (2015).
-- O. Bénichou, C. Loverdo, M. Moreau, R. Voituriez, *Intermittent
-  Search Strategies*, Rev. Mod. Phys. 83, 81 (2011).
-- H. C. Fogedby, *Lévy flights in random environments*,
-  Phys. Rev. Lett. 73, 2517 (1994).
-- M. Magdziarz, A. Weron, *Competition between subdiffusion and
-  Lévy flights: A Monte Carlo approach*, Phys. Rev. E 75, 056702
-  (2007).
+- R. Metzler, J. Klafter, Phys. Rep. 339, 1 (2000).
+- V. Zaburdaev, S. Denisov, J. Klafter, Rev. Mod. Phys. 87, 483 (2015).
+- E. A. Codling, M. J. Plank, S. Benhamou, J. R. Soc. Interface 5, 813
+  (2008).
+- O. Bénichou, C. Loverdo, M. Moreau, R. Voituriez, Rev. Mod. Phys. 83,
+  81 (2011).

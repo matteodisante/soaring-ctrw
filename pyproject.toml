@@ -51,7 +51,7 @@ Homepage = "https://github.com/matteodisante/soaring-ctrw"
 where = ["src"]
 
 [tool.setuptools]
-py-modules = ["distributions", "model", "observables", "simulation"]
+py-modules = ["cache", "distributions", "model", "observables", "paths", "simulation"]
 
 [tool.ruff]
 line-length = 88
