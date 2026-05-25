@@ -1,0 +1,540 @@
+"""1-D estimation of σ_θ from the universal H_eff ≈ 0.88 condition.
+
+For each aircraft, all numerical parameters (``v_xy``, ``mu_T``,
+``tau_0^T``, search/climb durations, intra-phase motion) are *fixed* at
+the Table 1 values of the manuscript. Only the angular diffusivity
+``sigma_theta`` is varied on a 1-D grid.
+
+Per grid point we simulate ``--n-trajectories`` independent flights of
+``--total-time`` seconds, compute the pure ensemble-averaged MSD
+``⟨|r(Δ)-r(0)|²⟩`` (one pair per trajectory per lag),
+and fit a single log-log slope over the empirical VDB fit window
+(``[--fit-min, --fit-max]`` s, default ``[10, 7000]`` s — matching the
+window used in Vilpellet, Darmon & Benzaquen (2026) for the empirical
+H_eff measurement, so the calibration condition H_eff(sigma_theta*) =
+0.88 is window-consistent with the data).
+
+The resulting H_eff(σ_θ) curve is interpolated to find the σ_θ* that
+satisfies H_eff(σ_θ*) = 0.88 (the universal empirical value).
+
+Two modes are produced independently:
+
+  ``bare``  — only the transition phase carries displacement; search
+              and climb phases consume their (Lomax / exponential)
+              durations but contribute no horizontal motion.
+  ``full``  — all three phases active with their intra-phase dynamics
+              (search active-budget local CTRW + climb circling+drift)
+              exactly as defined in the YAML.
+
+Cache policy: identical to other scripts (see ``cache.py``).
+
+Outputs per aircraft (under ``outputs/``):
+    data/estimate_sigma_theta/{aircraft}_{mode}.npz
+    data/estimate_sigma_theta/{aircraft}_{mode}.json
+    figures/estimate_sigma_theta_{aircraft}_overlay.pdf
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+import time
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+SRC_DIR = ROOT_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+import hashlib
+
+from cache import (
+    add_cache_args,
+    build_manifest,
+    decide_action,
+    load_dataset,
+    save_dataset,
+    slot_paths,
+)
+
+
+def _seed_from(*parts) -> int:
+    """Deterministic 32-bit-safe int seed from arbitrary labels."""
+    h = hashlib.sha256(repr(parts).encode()).digest()
+    return int.from_bytes(h[:4], "big")
+from model import AngularConfig, SoaringConfig
+from observables import fit_hurst, msd_ensemble
+from paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR
+from calibration import write_calibration_section
+from simulation import simulate_ensemble
+
+SCRIPT_SLUG = "estimate_sigma_theta"
+H_EMPIRICAL = 0.88
+MODES = ("bare", "full")
+AIRCRAFT_LABELS = {
+    "paragliders": "paragliders",
+    "hang_gliders": "hang gliders",
+    "sailplanes": "sailplanes",
+}
+
+
+# ---------------------------------------------------------------------------
+# Config helpers
+# ---------------------------------------------------------------------------
+
+
+def _config_for_mode(base: SoaringConfig, sigma_theta: float, mode: str) -> SoaringConfig:
+    """Return a copy of ``base`` with ``sigma_theta`` set and the
+    intra-phase motion either preserved (``full``) or stripped (``bare``)."""
+    if mode == "bare":
+        cfg = base.bare()
+    elif mode == "full":
+        cfg = base
+    else:
+        raise ValueError(f"unknown mode {mode!r}")
+    # Replace angular config (frozen dataclasses → reconstruct).
+    angular = AngularConfig(sigma_theta=sigma_theta, theta0=None)
+    return SoaringConfig(
+        name=f"{cfg.name}_sig{sigma_theta:.3f}",
+        v_xy=cfg.v_xy,
+        transition=cfg.transition,
+        search=cfg.search,
+        climb=cfg.climb,
+        angular=angular,
+        search_motion=cfg.search_motion,
+        climb_motion=cfg.climb_motion,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Core computation
+# ---------------------------------------------------------------------------
+
+
+def _compute_curve(
+    base: SoaringConfig,
+    mode: str,
+    sigma_grid: np.ndarray,
+    n_trajectories: int,
+    total_time: float,
+    dt: float,
+    fit_min: float,
+    fit_max: float,
+    rng: np.random.Generator,
+    logger: logging.Logger,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(H_array, msd_matrix)`` for one (aircraft, mode).
+
+    ``H_array`` has shape ``(len(sigma_grid),)``.
+    ``msd_matrix`` has shape ``(len(sigma_grid), n_steps-1)`` so the
+    plot script can later inspect the raw curves.
+    """
+    n_steps = int(total_time / dt) + 1
+    H_array = np.full(len(sigma_grid), np.nan)
+    msd_matrix = np.full((len(sigma_grid), n_steps - 1), np.nan)
+    lags = np.arange(1, n_steps) * dt
+
+    t_total = 0.0
+    for k, sigma in enumerate(sigma_grid):
+        cfg = _config_for_mode(base, sigma_theta=float(sigma), mode=mode)
+        t0 = time.time()
+        ens = simulate_ensemble(
+            config=cfg,
+            n_trajectories=n_trajectories,
+            total_time=total_time,
+            dt=dt,
+            rng=rng,
+        )
+        msd = msd_ensemble(ens)[1:]
+        msd_matrix[k] = msd
+        try:
+            H_array[k] = fit_hurst(lags, msd, (fit_min, fit_max)).hurst
+            h_str = f"{H_array[k]:.3f}"
+        except ValueError as exc:
+            h_str = f"NaN ({exc!s})"
+        t_cell = time.time() - t0
+        t_total += t_cell
+        msg = (
+            f"[{k+1:>2}/{len(sigma_grid)}] mode={mode}  "
+            f"sigma_theta={sigma:5.3f}  H_eff={h_str}  ({t_cell:.1f}s)"
+        )
+        print(f"  {msg}")
+        logger.info("%s", msg)
+    print(f"  total wall time ({mode}): {t_total/60:.2f} min")
+    logger.info("total wall time mode=%s: %.2f min", mode, t_total / 60)
+    return H_array, msd_matrix
+
+
+def _sigma_at_H(sigma_grid: np.ndarray, H_array: np.ndarray, H_target: float) -> float | None:
+    """Linear interpolation of the σ_θ at which H_eff = H_target.
+
+    Assumes H_eff is monotonically decreasing in σ_θ (more
+    decorrelation → lower H). Returns ``None`` if H_target is outside
+    the sampled range.
+    """
+    finite = ~np.isnan(H_array)
+    if finite.sum() < 2:
+        return None
+    sig = sigma_grid[finite]
+    Hf = H_array[finite]
+    if H_target > Hf.max() or H_target < Hf.min():
+        return None
+    if Hf[0] > Hf[-1]:
+        return float(np.interp(H_target, Hf[::-1], sig[::-1]))
+    return float(np.interp(H_target, Hf, sig))
+
+
+# ---------------------------------------------------------------------------
+# Plots
+# ---------------------------------------------------------------------------
+
+
+def _plot_one(
+    aircraft: str,
+    mode: str,
+    sigma_grid: np.ndarray,
+    H_array: np.ndarray,
+    sigma_star: float | None,
+    fit_min: float,
+    fit_max: float,
+    total_time: float,
+    n_trajectories: int,
+    output_path: Path,
+) -> None:
+    """Single-mode plot for one aircraft."""
+    fig, (ax_strip, ax_curve) = plt.subplots(
+        2, 1, figsize=(7, 5.2),
+        gridspec_kw={"height_ratios": [0.18, 1.0]},
+        constrained_layout=True, sharex=True,
+    )
+
+    # ── Top: 1-D heatmap strip ─────────────────────────────────────────
+    H_strip = H_array[np.newaxis, :]
+    extent = [sigma_grid[0], sigma_grid[-1], 0, 1]
+    im = ax_strip.imshow(
+        H_strip, aspect="auto", origin="lower", extent=extent,
+        cmap="viridis", vmin=0.5, vmax=1.0,
+    )
+    ax_strip.set_yticks([])
+    ax_strip.set_title(
+        rf"H_eff strip — {AIRCRAFT_LABELS[aircraft]} ({mode}-cycle)",
+        fontsize=10,
+    )
+    fig.colorbar(im, ax=ax_strip, label=r"$H_\mathrm{eff}$")
+
+    # ── Bottom: line plot ──────────────────────────────────────────────
+    ax_curve.plot(sigma_grid, H_array, "o-", color="C0", lw=1.5, ms=5)
+    ax_curve.axhline(H_EMPIRICAL, color="k", ls="--", lw=1.2,
+                     label=rf"$H={H_EMPIRICAL}$")
+    if sigma_star is not None:
+        ax_curve.axvline(sigma_star, color="red", ls=":", lw=1.2)
+        ax_curve.plot([sigma_star], [H_EMPIRICAL], "o", mec="red",
+                      mfc="white", ms=9, mew=1.5)
+        ax_curve.annotate(
+            rf"$\sigma_\theta^\star={sigma_star:.3f}$ rad",
+            xy=(sigma_star, H_EMPIRICAL),
+            xytext=(8, -18), textcoords="offset points",
+            fontsize=10, color="red",
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red", lw=0.6),
+        )
+    ax_curve.set_xlabel(r"$\sigma_\theta$ (rad)")
+    ax_curve.set_ylabel(r"$H_\mathrm{eff}$")
+    ax_curve.set_title(
+        rf"$H_\mathrm{{eff}}(\sigma_\theta)$ — {AIRCRAFT_LABELS[aircraft]} "
+        rf"({mode}-cycle, $\Delta\in[{fit_min:g},{fit_max:g}]$ s, "
+        rf"{n_trajectories} traj × {total_time:.0f} s)",
+        fontsize=10,
+    )
+    ax_curve.legend(fontsize=8)
+    ax_curve.grid(True, ls=":", alpha=0.5)
+    fig.savefig(output_path)
+    plt.close(fig)
+
+
+def _plot_overlay(
+    aircraft: str,
+    results: dict[str, dict],
+    fit_min: float,
+    fit_max: float,
+    output_path: Path,
+) -> None:
+    """Overlay of all available modes for one aircraft."""
+    fig, ax = plt.subplots(figsize=(7, 4.5), constrained_layout=True)
+    colors = {"bare": "C0", "full": "C3"}
+
+    for mode, res in results.items():
+        sigma_grid = res["sigma_grid"]
+        H_array = res["H_array"]
+        sigma_star = res["sigma_star"]
+        c = colors.get(mode, "C2")
+        ax.plot(sigma_grid, H_array, "o-", color=c, lw=1.5, ms=4,
+                label=rf"{mode}-cycle")
+        if sigma_star is not None:
+            ax.plot([sigma_star], [H_EMPIRICAL], "s", mec=c, mfc="white",
+                    ms=10, mew=1.5)
+            ax.annotate(
+                rf"$\sigma_\theta^\star={sigma_star:.3f}$",
+                xy=(sigma_star, H_EMPIRICAL),
+                xytext=(6, -16 if mode == "bare" else 10),
+                textcoords="offset points",
+                fontsize=9, color=c,
+            )
+
+    ax.axhline(H_EMPIRICAL, color="k", ls="--", lw=1.2, label=rf"$H={H_EMPIRICAL}$")
+    ax.set_xlabel(r"$\sigma_\theta$ (rad)")
+    ax.set_ylabel(r"$H_\mathrm{eff}$")
+    ax.set_title(
+        rf"$H_\mathrm{{eff}}(\sigma_\theta)$ — {AIRCRAFT_LABELS[aircraft]} "
+        rf"(fit window $[{fit_min:g},{fit_max:g}]$ s)",
+        fontsize=10,
+    )
+    ax.legend(fontsize=8)
+    ax.grid(True, ls=":", alpha=0.5)
+    fig.savefig(output_path)
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--aircraft", nargs="+",
+        default=["paragliders", "hang_gliders", "sailplanes"],
+        choices=["paragliders", "hang_gliders", "sailplanes"],
+    )
+    parser.add_argument(
+        "--mode", nargs="+", default=list(MODES), choices=list(MODES),
+        help="Run one or both intra-phase modes. Default: both.",
+    )
+    parser.add_argument("--n-sigma", type=int, default=16,
+                        help="Number of σ_θ values in the 1-D grid.")
+    parser.add_argument("--sigma-min", type=float, default=0.05)
+    parser.add_argument("--sigma-max", type=float, default=1.5)
+    parser.add_argument("--n-trajectories", type=int, default=1000)
+    parser.add_argument(
+        "--total-time", type=float, default=15_000.0,
+        help="Trajectory length (s). Must be ≥ fit_max so each trajectory "
+             "contributes a pair at the largest fit lag.",
+    )
+    parser.add_argument("--dt", type=float, default=1.0)
+    parser.add_argument(
+        "--fit-min", type=float, default=10.0,
+        help="Lower edge of the log-log MSD fit window (s). Matches "
+             "the VDB empirical fit range used in Ref. Vilpellet "
+             "et al. (2026) for direct calibration consistency.",
+    )
+    parser.add_argument(
+        "--fit-max", type=float, default=7_000.0,
+        help="Upper edge of the log-log MSD fit window (s). Matches "
+             "the VDB empirical fit range. Requires total_time >= "
+             "fit_max so the EA-MSD has samples at the upper edge.",
+    )
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--figures-dir", type=Path, default=FIGURES_DIR)
+    parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
+    parser.add_argument("--logs-dir", type=Path, default=ROOT_DIR / "logs")
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help=(
+            "Also merge sigma_theta* into "
+            "outputs/data/calibration/<aircraft>.yaml under the "
+            "`sigma_theta` section. If both modes are run, the "
+            "`full`-cycle value is used as the canonical `value`."
+        ),
+    )
+    add_cache_args(parser)
+    args = parser.parse_args()
+
+    args.figures_dir.mkdir(parents=True, exist_ok=True)
+    args.data_dir.mkdir(parents=True, exist_ok=True)
+    args.logs_dir.mkdir(parents=True, exist_ok=True)
+
+    log_path = args.logs_dir / f"{SCRIPT_SLUG}_{int(time.time())}.log"
+    logger = logging.getLogger(SCRIPT_SLUG)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+    fh = logging.FileHandler(log_path)
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+
+    print(f"Logging to: {log_path}")
+    logger.info("start run; args=%s", vars(args))
+
+    sigma_grid = np.linspace(args.sigma_min, args.sigma_max, args.n_sigma)
+
+    print(
+        f"1-D σ_θ scan to estimate σ_θ* from H_eff = {H_EMPIRICAL}.\n"
+        f"Aircraft: {', '.join(args.aircraft)}.  Modes: {', '.join(args.mode)}.\n"
+        f"σ_θ grid: {args.n_sigma} points in [{args.sigma_min:g}, {args.sigma_max:g}].\n"
+        f"Per cell: {args.n_trajectories} traj × {args.total_time:.0f} s, "
+        f"fit window [{args.fit_min:g}, {args.fit_max:g}] s.\n"
+    )
+
+    for aircraft in args.aircraft:
+        print(f"=== {aircraft} ===")
+        logger.info("aircraft=%s", aircraft)
+        base = SoaringConfig.from_yaml(CONFIGS_DIR / f"{aircraft}.yaml")
+        results: dict[str, dict] = {}
+
+        for mode in args.mode:
+            # Deterministic per-(aircraft, mode) RNG stream.
+            rng = np.random.default_rng(_seed_from(args.seed, aircraft, mode))
+
+            slot = f"{aircraft}_{mode}"
+            npz_path, manifest_path = slot_paths(
+                args.data_dir, SCRIPT_SLUG, slot
+            )
+            requested_manifest = build_manifest(
+                script=SCRIPT_SLUG,
+                params={
+                    "mode": mode,
+                    "n_sigma": args.n_sigma,
+                    "sigma_min": args.sigma_min,
+                    "sigma_max": args.sigma_max,
+                    "n_trajectories": args.n_trajectories,
+                    "total_time": args.total_time,
+                    "dt": args.dt,
+                    "fit_min": args.fit_min,
+                    "fit_max": args.fit_max,
+                    "seed": args.seed,
+                    "msd_estimator": "ea",
+                },
+                config_paths={"aircraft": CONFIGS_DIR / f"{aircraft}.yaml"},
+            )
+
+            decision = decide_action(
+                npz_path=npz_path,
+                manifest_path=manifest_path,
+                requested_manifest=requested_manifest,
+                mode=args.cache,
+                slot_label=f"{SCRIPT_SLUG}/{slot}",
+            )
+            if decision.diff:
+                print(f"  [{mode}] cache params differ:")
+                for line in decision.diff:
+                    print(f"    - {line}")
+            print(f"  [{mode}] cache decision: {decision.action}  ({decision.reason})")
+            logger.info("mode=%s decision=%s (%s) diff=%s",
+                        mode, decision.action, decision.reason, decision.diff)
+
+            if decision.action == "reuse":
+                arrays, _ = load_dataset(npz_path, manifest_path)
+                H_array = arrays["H_array"]
+                msd_matrix = arrays.get("msd_matrix")
+                sigma_grid_cached = arrays["sigma_grid"]
+                if not np.allclose(sigma_grid_cached, sigma_grid):
+                    sigma_grid = sigma_grid_cached
+            else:
+                H_array, msd_matrix = _compute_curve(
+                    base, mode, sigma_grid,
+                    n_trajectories=args.n_trajectories,
+                    total_time=args.total_time,
+                    dt=args.dt,
+                    fit_min=args.fit_min,
+                    fit_max=args.fit_max,
+                    rng=rng,
+                    logger=logger,
+                )
+                if args.cache != "off":
+                    save_dataset(
+                        npz_path=npz_path,
+                        manifest_path=manifest_path,
+                        manifest=requested_manifest,
+                        arrays={
+                            "sigma_grid": sigma_grid,
+                            "H_array": H_array,
+                            "msd_matrix": msd_matrix,
+                        },
+                    )
+                    print(f"  [{mode}] saved data: {npz_path}")
+                    logger.info("saved data: %s", npz_path)
+
+            sigma_star = _sigma_at_H(sigma_grid, H_array, H_EMPIRICAL)
+            if sigma_star is None:
+                print(
+                    f"  [{mode}] WARNING: H={H_EMPIRICAL} not reached in "
+                    f"σ_θ ∈ [{args.sigma_min}, {args.sigma_max}]."
+                )
+                logger.warning("mode=%s sigma_star not found", mode)
+            else:
+                print(f"  [{mode}] σ_θ* (H={H_EMPIRICAL}) = {sigma_star:.4f} rad")
+                logger.info("mode=%s sigma_star=%.4f", mode, sigma_star)
+
+            results[mode] = {
+                "sigma_grid": sigma_grid,
+                "H_array": H_array,
+                "msd_matrix": msd_matrix,
+                "sigma_star": sigma_star,
+            }
+
+        if results:
+            overlay_path = (
+                args.figures_dir / f"{SCRIPT_SLUG}_{aircraft}_overlay.pdf"
+            )
+            _plot_overlay(
+                aircraft=aircraft,
+                results=results,
+                fit_min=args.fit_min,
+                fit_max=args.fit_max,
+                output_path=overlay_path,
+            )
+            print(f"  overlay saved: {overlay_path}\n")
+            logger.info("saved overlay: %s", overlay_path)
+
+        if args.write:
+            by_mode = {
+                mode: (float(res["sigma_star"])
+                       if res["sigma_star"] is not None else None)
+                for mode, res in results.items()
+            }
+            # Canonical value: prefer full-cycle if available.
+            primary_mode = "full" if "full" in by_mode else next(iter(by_mode))
+            primary_value = by_mode.get(primary_mode)
+            if primary_value is None:
+                print(
+                    f"  WARNING: no sigma_star found for {aircraft}; "
+                    "calibration YAML not updated."
+                )
+            else:
+                payload = {
+                    "source_script": "estimate_sigma_theta",
+                    "value": primary_value,
+                    "mode": primary_mode,
+                    "by_mode": by_mode,
+                    "H_target": float(H_EMPIRICAL),
+                    "fit_window": [float(args.fit_min), float(args.fit_max)],
+                    "sigma_grid": [float(args.sigma_min), float(args.sigma_max),
+                                   int(args.n_sigma)],
+                    "n_trajectories": int(args.n_trajectories),
+                    "total_time": float(args.total_time),
+                    "dt": float(args.dt),
+                    "seed": int(args.seed),
+                }
+                out = write_calibration_section(
+                    aircraft, "sigma_theta", payload
+                )
+                print(
+                    f"  wrote {out}  (section: sigma_theta, "
+                    f"value={primary_value:.4f} rad, mode={primary_mode})"
+                )
+                logger.info("wrote sigma_theta to %s", out)
+
+    logger.info("end run")
+
+
+if __name__ == "__main__":
+    main()
