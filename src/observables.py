@@ -1,18 +1,16 @@
-"""Transport observables: time-averaged MSD and Hurst-exponent fits.
+"""Transport observables: ensemble-averaged MSD and Hurst-exponent fits.
 
-The functions here follow the same conventions used in Vilpellet et al.
-The time-averaged MSD of a single trajectory is
+The MSD estimator used throughout this codebase is the **pure
+ensemble-averaged** (EA) MSD:
 
-    δ²(Δ) = (1 / (N − k)) · Σ_{t=0}^{N−k−1} |r(t+k) − r(t)|²,
+    ⟨δ²(Δ)⟩_EA = ⟨ |r_m(Δ) − r_m(0)|² ⟩_m,
 
-with Δ = k·dt. We average further over an ensemble of trajectories by
-taking the sample mean of δ²(Δ) at each lag.
-
-The efficient implementation below uses the Calandrini algorithm, in
-which the cross-correlation term is computed via FFT, yielding an
-O(N log N) algorithm per trajectory [see Kehr, Kutner & Binder,
-Phys. Rev. B 23, 4931 (1981); or the discussion in Sec. 3.2 of
-Metzler et al., Phys. Chem. Chem. Phys. 16, 24128 (2014)].
+i.e. for each lag Δ we take a single pair (origin at t = 0, endpoint at
+t = Δ) from each realisation m and average across the ensemble. No
+time-averaging inside a single trajectory is performed in the
+production scripts: for CTRWs with α<1 the time-averaged MSD does not
+converge to the EA-MSD (weak ergodicity breaking), so EA is the
+correct estimator for the subdiffusive regime.
 """
 
 from __future__ import annotations
@@ -23,10 +21,8 @@ import numpy as np
 
 __all__ = [
     "HurstFit",
-    "msd_time_averaged",
     "msd_ensemble",
     "fit_hurst",
-    "velocity_autocorrelation",
 ]
 
 
@@ -56,72 +52,42 @@ class HurstFit:
     n_points: int
 
 
-def msd_time_averaged(trajectory: np.ndarray) -> np.ndarray:
-    """Time-averaged MSD for a single trajectory.
-
-    Parameters
-    ----------
-    trajectory : ndarray, shape (N, d)
-        Regularly sampled positions in *d* dimensions (usually d = 2).
-
-    Returns
-    -------
-    ndarray, shape (N,)
-        ``msd[k]`` = time-averaged squared displacement at lag ``k`` (in
-        sample units). ``msd[0] = 0`` by construction.
-    """
-    trajectory = np.asarray(trajectory, dtype=float)
-    if trajectory.ndim != 2:
-        raise ValueError(
-            f"trajectory must be 2-D of shape (N, d), got shape {trajectory.shape}"
-        )
-    n, d = trajectory.shape
-
-    # --- S1 term: (1/(N-k)) Σ [r²(t) + r²(t+k)] ---------------------------
-    # Computed recursively in O(N).
-    r2 = np.sum(trajectory**2, axis=1)
-    s1 = np.empty(n, dtype=float)
-    total = 2.0 * r2.sum()
-    s1[0] = total / n
-    for k in range(1, n):
-        total -= r2[k - 1] + r2[n - k]
-        s1[k] = total / (n - k)
-
-    # --- S2 term: (1/(N-k)) Σ r(t) · r(t+k) --------------------------------
-    # Computed via FFT: autocorrelation of each coordinate summed.
-    s2 = np.zeros(n, dtype=float)
-    size_fft = 2 * n  # zero-pad to avoid circular convolution
-    for axis in range(d):
-        x = trajectory[:, axis]
-        f = np.fft.fft(x, n=size_fft)
-        auto = np.fft.ifft(f * np.conjugate(f)).real[:n]
-        s2 += auto / (n - np.arange(n))
-
-    msd = s1 - 2.0 * s2
-    msd[0] = 0.0  # clean up numerical noise at Δ=0
-    return msd
-
-
 def msd_ensemble(ensemble: np.ndarray) -> np.ndarray:
-    """Ensemble-averaged, time-averaged MSD.
+    r"""Pure ensemble-averaged MSD.
+
+    For each lag ``k`` the MSD is the mean over trajectories of the
+    squared displacement from the trajectory's own origin:
+
+    .. math::
+        \langle\delta^2(k)\rangle_{\mathrm{EA}}
+        = \frac{1}{M}\sum_{m=1}^{M} \bigl\lvert r_m(k) - r_m(0)\bigr\rvert^2 .
+
+    No internal time-average is performed: each trajectory contributes
+    exactly one pair ``(0, k)`` to the lag-``k`` estimate. This is the
+    appropriate estimator for non-ergodic processes such as a CTRW with
+    α<1 (where TA-MSD and EA-MSD do not coincide).
 
     Parameters
     ----------
     ensemble : ndarray, shape (M, N, d)
-        ``M`` trajectories of length ``N`` in dimension ``d``.
+        ``M`` trajectories of length ``N`` in dimension ``d``. The
+        origin of each trajectory is ``ensemble[m, 0, :]``.
 
     Returns
     -------
     ndarray, shape (N,)
-        Mean of ``msd_time_averaged`` over the ensemble.
+        EA-MSD at each lag ``k = 0, 1, …, N-1``. ``out[0] = 0`` by
+        construction.
     """
     if ensemble.ndim != 3:
         raise ValueError(
             "ensemble must have shape (n_trajectories, n_steps, d), "
             f"got shape {ensemble.shape}"
         )
-    per_traj = np.stack([msd_time_averaged(traj) for traj in ensemble], axis=0)
-    return per_traj.mean(axis=0)
+    ensemble = np.asarray(ensemble, dtype=float)
+    disp = ensemble - ensemble[:, 0:1, :]      # (M, N, d)
+    sq = np.sum(disp * disp, axis=2)            # (M, N)
+    return sq.mean(axis=0)                       # (N,)
 
 
 def fit_hurst(
