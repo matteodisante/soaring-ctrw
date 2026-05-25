@@ -196,18 +196,22 @@ class MittagLeffler(WaitingTimeSampler):
 
     Sampling
     --------
-    We use the Kozubowski-Rachev (2001) one-line form: if ``U`` is
-    uniform on ``(0, π)`` and ``V`` uniform on ``(0, 1)`` are
-    independent, then
+    For ``α ∈ (0, 1)`` we use the subordinator representation of the
+    Pillai-ML distribution [Pillai 1990; Kozubowski 2001]:
 
-        τ = τ_0 · sin(α U) · [sin((1 − α) U) / (− log V)]^{(1−α)/α}
-              / sin(U)^{1/α}
+        τ = τ_0 · E^{1/α} · S_α,
 
-    is distributed as the stable subordinator evaluated at unit time
-    with stability index α (equivalently, ``τ = τ_0 · |W|^{1/α}``
-    with W a positive α-stable random variable). This form is robust
-    across the full ``α ∈ (0, 1)`` range; for ``α = 1`` it reduces to
-    the exponential of mean ``τ_0``.
+    where ``E ~ Exp(1)`` and ``S_α`` is a one-sided positive
+    α-stable random variable with Laplace transform
+    ``E[exp(-s S_α)] = exp(-s^α)``. The variable ``S_α`` is sampled
+    via the Chambers-Mallows-Stuck (CMS) formula: if
+    ``U ~ Uniform(0, π)`` and ``V ~ Uniform(0, 1)`` are independent,
+
+        S_α = sin(α U) · [sin((1 − α) U) / (− log V)]^{(1−α)/α}
+                / sin(U)^{1/α}.
+
+    For ``α = 1`` the distribution reduces to the exponential of
+    mean ``τ_0``.
 
     Parameters
     ----------
@@ -242,25 +246,27 @@ class MittagLeffler(WaitingTimeSampler):
     def sample(self, size: int, rng: np.random.Generator) -> np.ndarray:
         r"""Sample ``size`` i.i.d. Mittag-Leffler waiting times.
 
-        For α = 1, returns exponential samples. For α < 1, uses the
-        Kozubowski-Rachev formula [Kozubowski 2001, Eq. 4.4]:
+        For ``α = 1`` returns exponential samples with mean ``τ_0``.
+        For ``α < 1`` uses the subordinator form
+        ``τ = τ_0 · E^{1/α} · S_α`` with ``E ~ Exp(1)`` and ``S_α``
+        a positive α-stable r.v. drawn via Chambers-Mallows-Stuck.
 
-            τ = τ_0 · sin(α π U) · [sin((1−α) π U) / (− log V)]^{(1−α)/α}
-                  / sin(π U)^{1/α}
-
-        where U ~ Uniform(0, π) and V ~ Uniform(0, 1) are independent.
-        This form is robust across the full α ∈ (0, 1) range.
+        This yields the Pillai-ML distribution with survival
+        ``S(τ) = E_α(-(τ/τ_0)^α)`` (heavy tail with index α).
         """
         if self.alpha == 1.0:
             return rng.exponential(scale=self.tau_0, size=size)
 
+        alpha = self.alpha
         U = rng.uniform(0.0, np.pi, size=size)
         V = rng.uniform(0.0, 1.0, size=size)
-        alpha = self.alpha
+        E = -np.log(rng.uniform(0.0, 1.0, size=size))  # Exp(1)
 
-        # Kozubowski-Rachev
-        num = np.sin(alpha * U) * (
-            np.sin((1.0 - alpha) * U) / (-np.log(V))
-        ) ** ((1.0 - alpha) / alpha)
-        den = np.sin(U) ** (1.0 / alpha)
-        return self.tau_0 * num / den
+        # Positive α-stable subordinator via Chambers-Mallows-Stuck
+        stable = (
+            np.sin(alpha * U) / np.sin(U) ** (1.0 / alpha)
+        ) * (np.sin((1.0 - alpha) * U) / (-np.log(V))) ** (
+            (1.0 - alpha) / alpha
+        )
+
+        return self.tau_0 * E ** (1.0 / alpha) * stable
