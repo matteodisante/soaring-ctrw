@@ -1,38 +1,54 @@
-"""Monte Carlo simulation of the step-based CTRW model.
+"""Monte Carlo simulation of the cycle-based CTRW soaring-flight model.
 
-Two simulation modes are provided:
+A single flight is a renewal sequence of soaring *cycles*. Each cycle
+contains three phases (transition, search, climb) generated as follows.
 
-- :func:`simulate_single`: generates one trajectory expressed *per cycle*
-  (i.e. one sample per complete transition→search→climb cycle). This is
-  the native representation of the model and is used for analytical
-  cross-checks where the natural time unit is the cycle index.
+**Transition (T).** A straight-line glide at constant speed ``v_xy`` in
+direction ``theta_n``. The cycle-to-cycle heading evolves as
+``theta_n = theta_{n-1} + eta_n`` with ``eta_n ~ N(0, sigma_theta^2)``.
+The initial heading ``theta_0`` is drawn uniformly on ``[0, 2*pi)``
+unless ``AngularConfig.theta0`` is explicitly set.
 
-- :func:`simulate_ensemble`: produces a regularly sampled ensemble of
-  trajectories on a common time grid with step ``dt``. This is the
-  quantity needed to compute the time-lag MSD in physical seconds,
-  directly comparable to Fig. 1 of the paper.
+**Search (S).** A local CTRW with physical-duration stopping.
 
-Intra-phase motion has three pieces:
+    - Initial local heading ``psi_0 ~ U(0, 2*pi)``, independent of
+      ``theta_n``.
+    - At each step ``j`` the pilot performs a ballistic relocation of
+      duration ``tau_b_j ~ Exp(tau_b_S)`` at speed ``u_S`` in
+      direction ``psi_j``, then waits for a turning time
+      ``tau_turn_j`` drawn from a Mittag-Leffler with stability
+      ``alpha_S`` and scale ``tau_turn_S`` (walker stationary).
+    - Direction update *after a fully completed turning wait*:
+      ``psi_{j+1} = psi_j + eps_j * Omega_S * tau_turn_j``,
+      ``eps_j = +-1`` equiprobable.
+    - The local CTRW stops when the cumulative *physical* time
+      ``sum(tau_b) + sum(tau_turn)`` reaches the Lomax-sampled search
+      duration ``tau_S_n``. Whichever component (leg or wait) straddles
+      ``tau_S_n`` is truncated so that
+      ``T_phys^S = sum(tau_b) + sum(tau_turn) = tau_S_n`` exactly.
+    - As a consequence, the search-phase physical duration coincides
+      with the Lomax draw (no heavy-tail blow-up from infinite-mean
+      Mittag-Leffler waits).
 
-- **Transition**: constant velocity ``v_xy·ê(θ_n)`` over the whole
-  duration ``τ^T_n`` (heading-correlated ballistic kernel).
-- **Search**: subordinated Lévy walk implemented in
-  :func:`_sample_ctrw_legs` — alternating ballistic legs of speed
-  ``v_c^S`` (exponential durations of scale ``σ_0``, Gaussian-random-walk
-  heading on the circle of variance ``σ_ψ²``) and stationary
-  Mittag-Leffler waits of stability ``α_S∈(0,1)`` and scale
-  ``τ_w^S``. Reproduces the ballistic → sub-diffusive ``Δ^{α_S}``
-  crossover of Fig. 3 of Vilpellet et al. (2026). Controlled by
-  :class:`SearchMotionConfig`.
-- **Climb**: 2-D harmonic oscillator (pilot circling a thermal core
-  of radius ``r_0`` with mean turn period ``T_turn``, Gaussian
-  per-cycle dispersion ``σ_T``) plus a linear orographic drift of
-  magnitude ``v_drift`` and uniform per-cycle direction. Controlled
-  by :class:`ClimbMotionConfig`.
+**Climb (C).** Circular motion plus drift, all starting at the end of
+the search.
 
-If ``search_motion`` and ``climb_motion`` are omitted from the config,
-the corresponding phase is held horizontally stationary (minimal
-baseline used as a sanity check).
+    - Per-cycle turn period ``T_turn_n ~ N(T_turn_mean, T_turn_std^2)``,
+      clipped at ``0.2 * T_turn_mean`` for positivity. Angular
+      frequency ``omega_n = 2*pi / T_turn_n``.
+    - Initial orbital phase ``phi_0 ~ U(0, 2*pi)``, independent of
+      ``theta_n``.
+    - Slow orographic drift of magnitude ``v_drift`` along a direction
+      ``phi_drift ~ U(0, 2*pi)`` drawn independently per cycle.
+
+Two simulation modes are provided.
+
+- :func:`simulate_single`: returns a :class:`CycleTrajectory` with the
+  end-of-cycle positions and the bookkeeping needed to reconstruct the
+  full continuous-time trajectory on demand (random angles, search
+  legs, climb periods).
+- :func:`simulate_ensemble`: returns an array of trajectories sampled
+  on a regular time grid, suitable for direct MSD computation.
 """
 
 from __future__ import annotations
@@ -41,49 +57,98 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from distributions import MittagLeffler
 from model import SoaringConfig
 
 __all__ = [
     "CycleTrajectory",
+    "SearchEpisode",
     "simulate_single",
     "simulate_ensemble",
+    "interpolate_trajectory",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Data containers
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SearchEpisode:
+    """Bookkeeping of one search-phase realisation.
+
+    Attributes
+    ----------
+    leg_durations : ndarray, shape (L,)
+        Duration of each ballistic relocation (s). If the episode ends
+        inside a leg, the last entry is truncated so the total physical
+        time matches the Lomax-sampled search duration ``tau_S_n``.
+    leg_angles : ndarray, shape (L,)
+        Heading of each ballistic relocation (rad).
+    leg_start_phys : ndarray, shape (L,)
+        Phase-local physical start time of each leg (s), with
+        ``leg_start_phys[0] = 0``.
+    turn_durations : ndarray, shape (L,)
+        Turning-time wait that follows each leg (s). The last entry
+        is 0 if the episode ended inside a leg (no following wait), or
+        truncated if the episode ended inside a wait.
+    T_phys : float
+        Total physical time occupied by the search episode (s); equals
+        ``tau_S_n`` by construction (up to floating-point round-off).
+    """
+
+    leg_durations: np.ndarray
+    leg_angles: np.ndarray
+    leg_start_phys: np.ndarray
+    turn_durations: np.ndarray
+    T_phys: float
+
+    def endpoint(self, u_S: float) -> tuple[float, float]:
+        """Cartesian net displacement produced by the ballistic legs."""
+        dx = u_S * np.sum(self.leg_durations * np.cos(self.leg_angles))
+        dy = u_S * np.sum(self.leg_durations * np.sin(self.leg_angles))
+        return float(dx), float(dy)
 
 
 @dataclass(frozen=True)
 class CycleTrajectory:
-    """One realisation of the step-based CTRW, indexed by cycle number.
+    """One realisation of the cycle-based CTRW.
 
     Attributes
     ----------
     positions : ndarray, shape (N+1, 2)
-        Horizontal position at the end of each complete cycle.
+        Horizontal position at the end of each complete cycle, with
+        ``positions[0] = 0``.
     cycle_end_times : ndarray, shape (N+1,)
-        Physical time at the end of each cycle, ``cycle_end_times[0]=0``.
+        Physical time at the end of each cycle (s), with
+        ``cycle_end_times[0] = 0``.
     headings : ndarray, shape (N,)
-        Transition-phase heading angle used for cycle ``n`` (rad).
-    phase_durations : ndarray, shape (N, 3)
-        Columns are (τ^T, τ^S, τ^C) for each cycle.
-    search_legs : list[tuple[ndarray, ndarray]]
-        For each cycle ``n``, a tuple ``(durations, angles)`` of 1D
-        arrays giving the duration and direction of each leg of the
-        intra-search Lévy walk. Empty tuple if ``search_motion is None``.
-    climb_phase0 : ndarray, shape (N,)
-        Initial phase :math:`\\phi_0` of the thermalling harmonic
-        oscillator for each cycle (rad). Uniform on :math:`[0, 2\\pi)`.
-    climb_drift_angles : ndarray, shape (N,)
-        Direction :math:`\\phi^{\\mathrm{drift}}_n` of the orographic
-        drift during climb (rad). Uniform on :math:`[0, 2\\pi)`.
+        Transition-phase heading angle of each cycle (rad).
+    phase_durations_active : ndarray, shape (N, 3)
+        Columns ``(tau_T, tau_S, tau_C)`` of the Lomax/exponential
+        draws. Under the physical-duration stopping rule the search
+        column also coincides with the physical search duration
+        ``T_phys^S`` of the corresponding episode.
+    search_episodes : list[SearchEpisode]
+        Local-CTRW bookkeeping for each cycle.
+    climb_initial_phase : ndarray, shape (N,)
+        Initial orbital phase ``phi_0`` of the thermalling oscillator
+        for each cycle (rad).
+    climb_drift_angle : ndarray, shape (N,)
+        Direction of the orographic drift during each cycle (rad).
+    climb_turn_period : ndarray, shape (N,)
+        Per-cycle (clipped Gaussian) turn period (s).
     """
 
     positions: np.ndarray
     cycle_end_times: np.ndarray
     headings: np.ndarray
-    phase_durations: np.ndarray
-    search_legs: list
-    climb_phase0: np.ndarray
-    climb_drift_angles: np.ndarray
-    climb_turn_periods: np.ndarray  # per-cycle T_turn, shape (N,)
+    phase_durations_active: np.ndarray
+    search_episodes: list[SearchEpisode]
+    climb_initial_phase: np.ndarray
+    climb_drift_angle: np.ndarray
+    climb_turn_period: np.ndarray
 
     @property
     def n_cycles(self) -> int:
@@ -93,315 +158,466 @@ class CycleTrajectory:
     def total_time(self) -> float:
         return float(self.cycle_end_times[-1])
 
+    @property
+    def search_T_phys(self) -> np.ndarray:
+        """Per-cycle physical search durations (sum of legs + turns)."""
+        return np.array([ep.T_phys for ep in self.search_episodes])
+
+
+# ---------------------------------------------------------------------------
+# Per-phase sampling
+# ---------------------------------------------------------------------------
+
+
+def _sample_search_episode(
+    tau_S_n: float,
+    cfg_search: "object",  # SearchMotionConfig
+    rng: np.random.Generator,
+) -> SearchEpisode:
+    r"""Generate one search episode with the physical-duration stopping rule.
+
+    The local CTRW alternates ballistic legs (speed ``u_S``,
+    exponential duration ``tau_b_S``) and Mittag-Leffler turning waits
+    (stability ``alpha_S``, scale ``tau_turn_S``). The episode ends
+    when the cumulative *physical* time (legs + waits) reaches the
+    Lomax-sampled search duration ``tau_S_n``. Whichever component
+    (leg or wait) straddles ``tau_S_n`` is truncated so that
+    ``T_phys = sum(leg_durations) + sum(turn_durations) = tau_S_n``
+    exactly.
+
+    Direction update (paper Eq. 8) is applied only after a fully
+    completed turning wait, never after a truncated one (no subsequent
+    leg makes the rotation observable).
+    """
+    if tau_S_n <= 0.0:
+        return SearchEpisode(
+            leg_durations=np.zeros(0),
+            leg_angles=np.zeros(0),
+            leg_start_phys=np.zeros(0),
+            turn_durations=np.zeros(0),
+            T_phys=0.0,
+        )
+
+    u_S = cfg_search.u_S
+    tau_b_S = cfg_search.tau_b_S
+    tau_turn_S = cfg_search.tau_turn_S
+    alpha_S = cfg_search.alpha_S
+    Omega_S = cfg_search.Omega_S
+
+    ml = MittagLeffler(alpha=alpha_S, tau_0=tau_turn_S)
+
+    # Pre-sample in geometric batches. Expected leg count is bounded
+    # above by tau_S_n / tau_b_S (zero-wait limit); waits make it
+    # smaller, so this is a safe over-estimate.
+    batch = max(16, int(3.0 * tau_S_n / tau_b_S))
+
+    legs: list[float] = []
+    turns: list[float] = []
+    angles: list[float] = []
+    start_phys: list[float] = []
+
+    psi = float(rng.uniform(0.0, 2.0 * np.pi))
+    elapsed_phys = 0.0
+
+    while True:
+        bal = rng.exponential(scale=tau_b_S, size=batch)
+        tur = ml.sample(batch, rng)
+        eps = rng.choice(np.array([-1.0, 1.0]), size=batch)
+
+        for tau_b_j, tau_turn_j, eps_j in zip(bal, tur, eps):
+            # Leg phase.
+            remaining = tau_S_n - elapsed_phys
+            if remaining <= 0.0:
+                # Should not happen — the explicit returns below cover
+                # every termination path.
+                break
+
+            if tau_b_j >= remaining:
+                # Episode ends inside this leg; no following wait.
+                legs.append(float(remaining))
+                turns.append(0.0)
+                angles.append(psi)
+                start_phys.append(elapsed_phys)
+                elapsed_phys += remaining
+                return SearchEpisode(
+                    leg_durations=np.array(legs),
+                    leg_angles=np.array(angles),
+                    leg_start_phys=np.array(start_phys),
+                    turn_durations=np.array(turns),
+                    T_phys=elapsed_phys,
+                )
+
+            # Full leg completes.
+            legs.append(float(tau_b_j))
+            angles.append(psi)
+            start_phys.append(elapsed_phys)
+            elapsed_phys += tau_b_j
+
+            # Wait phase.
+            remaining = tau_S_n - elapsed_phys
+            if remaining <= 0.0:
+                # Episode ends exactly at end-of-leg.
+                turns.append(0.0)
+                return SearchEpisode(
+                    leg_durations=np.array(legs),
+                    leg_angles=np.array(angles),
+                    leg_start_phys=np.array(start_phys),
+                    turn_durations=np.array(turns),
+                    T_phys=elapsed_phys,
+                )
+
+            if tau_turn_j >= remaining:
+                # Episode ends inside this wait. Truncate and stop.
+                turns.append(float(remaining))
+                elapsed_phys += remaining
+                return SearchEpisode(
+                    leg_durations=np.array(legs),
+                    leg_angles=np.array(angles),
+                    leg_start_phys=np.array(start_phys),
+                    turn_durations=np.array(turns),
+                    T_phys=elapsed_phys,
+                )
+
+            # Full wait completes.
+            turns.append(float(tau_turn_j))
+            elapsed_phys += tau_turn_j
+
+            # Direction update (paper Eq. 8) after a full wait only.
+            psi = psi + eps_j * Omega_S * tau_turn_j
+
+
+def _sample_climb_geometry(
+    n_cycles: int,
+    cfg_climb: "object",  # ClimbMotionConfig
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Sample per-cycle climb parameters: ``T_turn_n``, ``phi_0_n``, ``phi_drift_n``."""
+    T_mean = cfg_climb.T_turn_mean
+    T_std = cfg_climb.T_turn_std
+
+    if T_std > 0:
+        T_turn = rng.normal(loc=T_mean, scale=T_std, size=n_cycles)
+        T_turn = np.clip(T_turn, 0.2 * T_mean, None)
+    else:
+        T_turn = np.full(n_cycles, T_mean)
+
+    phi0 = rng.uniform(0.0, 2.0 * np.pi, size=n_cycles)
+    phi_drift = rng.uniform(0.0, 2.0 * np.pi, size=n_cycles)
+    return T_turn, phi0, phi_drift
+
+
+def _climb_position(
+    t: np.ndarray,
+    r0: float,
+    omega: float,
+    phi0: float,
+    v_drift: float,
+    phi_drift: float,
+) -> np.ndarray:
+    """Climb-relative position at intra-climb times ``t``.
+
+    The motion is ``r0 * (cos(omega t + phi0) - cos phi0,
+    sin(omega t + phi0) - sin phi0)`` plus ``v_drift * t * (cos phi_drift,
+    sin phi_drift)``, so the climb starts at the origin of its own
+    local frame and is continuous with the preceding search endpoint.
+    """
+    cos_phi0 = np.cos(phi0)
+    sin_phi0 = np.sin(phi0)
+    arg = omega * t + phi0
+    x = r0 * (np.cos(arg) - cos_phi0) + v_drift * t * np.cos(phi_drift)
+    y = r0 * (np.sin(arg) - sin_phi0) + v_drift * t * np.sin(phi_drift)
+    return np.column_stack([x, y])
+
+
+def _search_position(
+    t: np.ndarray,
+    episode: SearchEpisode,
+    u_S: float,
+) -> np.ndarray:
+    """Search-relative position at intra-search physical times ``t``.
+
+    During the ballistic leg ``k`` (time interval
+    ``[leg_start_phys[k], leg_start_phys[k] + leg_durations[k]]``) the
+    walker moves at speed ``u_S`` in direction ``leg_angles[k]``.
+    During the subsequent turning wait the walker is stationary.
+    """
+    n = len(t)
+    if n == 0 or episode.T_phys == 0.0:
+        return np.zeros((n, 2))
+
+    leg_d = episode.leg_durations
+    angs = episode.leg_angles
+    start = episode.leg_start_phys
+    turn = episode.turn_durations
+
+    # End-of-leg cumulative position (relative to search start).
+    jx = u_S * leg_d * np.cos(angs)
+    jy = u_S * leg_d * np.sin(angs)
+    cum_x_end = np.cumsum(jx)
+    cum_y_end = np.cumsum(jy)
+    start_x = np.concatenate(([0.0], cum_x_end[:-1]))
+    start_y = np.concatenate(([0.0], cum_y_end[:-1]))
+    leg_end = start + leg_d
+
+    t_clip = np.clip(t, 0.0, episode.T_phys)
+    # leg index k such that start[k] <= t < start[k+1] (or last leg).
+    k_arr = np.searchsorted(start, t_clip, side="right") - 1
+    k_arr = np.clip(k_arr, 0, len(leg_d) - 1)
+
+    x_out = np.empty(n)
+    y_out = np.empty(n)
+    for i in range(n):
+        k = int(k_arr[i])
+        t_local = t_clip[i] - start[k]
+        if t_local <= leg_d[k]:
+            x_out[i] = start_x[k] + u_S * t_local * np.cos(angs[k])
+            y_out[i] = start_y[k] + u_S * t_local * np.sin(angs[k])
+        else:
+            # Inside the turning wait after leg k.
+            x_out[i] = cum_x_end[k]
+            y_out[i] = cum_y_end[k]
+    return np.column_stack([x_out, y_out])
+
+
+# ---------------------------------------------------------------------------
+# Top-level simulation
+# ---------------------------------------------------------------------------
+
 
 def simulate_single(
     config: SoaringConfig,
     n_cycles: int,
     rng: np.random.Generator,
 ) -> CycleTrajectory:
-    """Simulate one trajectory of exactly ``n_cycles`` cycles.
-
-    Each cycle has three phases:
-
-    1. **Transition**: deterministic ballistic step
-       :math:`v_{xy}\\,\\tau^T_n\\,\\hat e(\\theta_n)` where the
-       heading :math:`\\theta_n` follows a Gaussian random walk (A3).
-
-    2. **Search**: coupled Lévy walk of rectilinear legs inside the
-       total phase duration :math:`\\tau^S_n` drawn from (A1). Leg
-       durations are i.i.d. Mittag-Leffler with stability
-       :math:`\\alpha_S` and scale :math:`\\tau_{\\ell,\\min}^S`,
-       truncated so that the sum equals :math:`\\tau^S_n`. During each
-       leg the walker moves at constant speed :math:`v_c^S` in a
-       direction :math:`\\psi_k` that follows a Gaussian random walk
-       on the circle with increment variance
-       :math:`\\sigma_{\\psi,S}^2`.
-
-    3. **Climb**: 2D harmonic oscillator (pilot circling a thermal
-       at radius :math:`r_0` with period :math:`T_{\\mathrm{turn}}`)
-       plus a linear drift of magnitude :math:`v_{\\mathrm{drift}}`
-       in a direction :math:`\\phi_n^{\\mathrm{drift}}` drawn i.i.d.
-       uniform on :math:`[0, 2\\pi)` per cycle.
-    """
+    """Simulate one trajectory of exactly ``n_cycles`` cycles."""
     if n_cycles <= 0:
         raise ValueError(f"n_cycles must be positive, got {n_cycles}")
 
-    transition_sampler = config.transition.build()
-    search_sampler = config.search.build()
-    climb_sampler = config.climb.build()
+    tau_T = config.transition.build().sample(n_cycles, rng)
+    tau_S = config.search.build().sample(n_cycles, rng)
+    tau_C = config.climb.build().sample(n_cycles, rng)
 
-    tau_T = transition_sampler.sample(n_cycles, rng)
-    tau_S = search_sampler.sample(n_cycles, rng)
-    tau_C = climb_sampler.sample(n_cycles, rng)
-    phase_durations = np.column_stack([tau_T, tau_S, tau_C])
-
-    # Transition heading: Gaussian random walk on the circle
+    # --- Transition headings: GRW on the circle, isotropic theta_0 ----
+    if config.angular.theta0 is None:
+        theta0 = float(rng.uniform(0.0, 2.0 * np.pi))
+    else:
+        theta0 = float(config.angular.theta0)
     eta = rng.normal(loc=0.0, scale=config.angular.sigma_theta, size=n_cycles)
-    theta = config.angular.theta0 + np.cumsum(eta)
+    headings = np.empty(n_cycles)
+    headings[0] = theta0
+    if n_cycles > 1:
+        headings[1:] = theta0 + np.cumsum(eta[1:])
+    # (eta[0] is unused: theta_0 is the prior, not theta_{-1} + eta_0.)
 
-    # Transition displacement
-    dx_T = config.v_xy * tau_T * np.cos(theta)
-    dy_T = config.v_xy * tau_T * np.sin(theta)
+    # --- Search episodes (active-budget local CTRW) -------------------
+    if config.search_motion is not None:
+        search_episodes: list[SearchEpisode] = [
+            _sample_search_episode(tau_S[n], config.search_motion, rng)
+            for n in range(n_cycles)
+        ]
+        T_phys_S = np.array([ep.T_phys for ep in search_episodes])
+        u_S = config.search_motion.u_S
+    else:
+        # Bare-cycle mode: search phase has duration tau_S (Lomax) and
+        # contributes no horizontal displacement. We still record empty
+        # SearchEpisode objects so the trajectory bookkeeping is uniform.
+        search_episodes = [
+            SearchEpisode(
+                leg_durations=np.zeros(0),
+                leg_angles=np.zeros(0),
+                leg_start_phys=np.zeros(0),
+                turn_durations=np.zeros(0),
+                T_phys=float(tau_S[n]),
+            )
+            for n in range(n_cycles)
+        ]
+        T_phys_S = tau_S.copy()
+        u_S = 0.0
 
-    # Search: subordinated Lévy walk (ballistic legs + ML waits)
-    search_legs = []
+    # --- Climb geometry -----------------------------------------------
+    if config.climb_motion is not None:
+        T_turn_n, phi0_n, phi_drift_n = _sample_climb_geometry(
+            n_cycles, config.climb_motion, rng
+        )
+        r0 = config.climb_motion.r0
+        v_drift = config.climb_motion.v_drift
+    else:
+        # Bare-cycle mode: no circular motion, no drift.
+        T_turn_n = np.ones(n_cycles)  # arbitrary, unused with r0=0
+        phi0_n = np.zeros(n_cycles)
+        phi_drift_n = np.zeros(n_cycles)
+        r0 = 0.0
+        v_drift = 0.0
+
+    # --- Per-cycle net displacements ----------------------------------
+    dx_T = config.v_xy * tau_T * np.cos(headings)
+    dy_T = config.v_xy * tau_T * np.sin(headings)
+
     dx_S = np.zeros(n_cycles)
     dy_S = np.zeros(n_cycles)
-    if config.search_motion is not None:
-        v_c_S = config.search_motion.v_c_S
-        sigma_0 = config.search_motion.sigma_0
-        tau_0_S = config.search_motion.tau_0_S
-        alpha_S = config.search_motion.alpha_S
-        sigma_psi_S = config.search_motion.sigma_psi_S
-        for n in range(n_cycles):
-            leg_d, wait_d, angs, leg_t0 = _sample_ctrw_legs(
-                total_time=tau_S[n],
-                alpha=alpha_S,
-                sigma_0=sigma_0,
-                tau_0=tau_0_S,
-                v_c=v_c_S,
-                sigma_angular=sigma_psi_S,
-                rng=rng,
-            )
-            search_legs.append((leg_d, wait_d, angs, leg_t0))
-            # End-of-phase displacement: sum of ballistic leg contributions
-            dx_S[n] = v_c_S * np.sum(leg_d * np.cos(angs))
-            dy_S[n] = v_c_S * np.sum(leg_d * np.sin(angs))
-    else:
-        search_legs = [
-            (np.array([]), np.array([]), np.array([]), np.array([]))
-            for _ in range(n_cycles)
-        ]
+    for n, ep in enumerate(search_episodes):
+        dxs, dys = ep.endpoint(u_S)
+        dx_S[n] = dxs
+        dy_S[n] = dys
 
-    # Climb: 2D harmonic oscillator + drift
-    dx_C = np.zeros(n_cycles)
-    dy_C = np.zeros(n_cycles)
-    climb_turn_periods = np.full(n_cycles, 30.0)
-    if config.climb_motion is not None:
-        r0 = config.climb_motion.thermal_radius
-        T_turn_mean = config.climb_motion.turn_period
-        T_turn_std = config.climb_motion.turn_period_std
-        v_drift = config.climb_motion.v_drift
+    omega_n = 2.0 * np.pi / T_turn_n
+    arg_end = omega_n * tau_C + phi0_n
+    osc_dx = r0 * (np.cos(arg_end) - np.cos(phi0_n))
+    osc_dy = r0 * (np.sin(arg_end) - np.sin(phi0_n))
+    drift_dx = v_drift * tau_C * np.cos(phi_drift_n)
+    drift_dy = v_drift * tau_C * np.sin(phi_drift_n)
+    dx_C = osc_dx + drift_dx
+    dy_C = osc_dy + drift_dy
 
-        # Per-cycle turn period: Gaussian, positivity-clipped
-        if T_turn_std > 0:
-            T_turn_n = rng.normal(loc=T_turn_mean, scale=T_turn_std, size=n_cycles)
-            T_turn_n = np.clip(T_turn_n, 0.2 * T_turn_mean, None)
-        else:
-            T_turn_n = np.full(n_cycles, T_turn_mean)
-        climb_turn_periods = T_turn_n
-        omega_n = 2 * np.pi / T_turn_n
-
-        phi0 = rng.uniform(0.0, 2 * np.pi, size=n_cycles)
-        phi_drift = rng.uniform(0.0, 2 * np.pi, size=n_cycles)
-
-        osc_end_x = r0 * (np.cos(omega_n * tau_C + phi0) - np.cos(phi0))
-        osc_end_y = r0 * (np.sin(omega_n * tau_C + phi0) - np.sin(phi0))
-        drift_end_x = v_drift * tau_C * np.cos(phi_drift)
-        drift_end_y = v_drift * tau_C * np.sin(phi_drift)
-
-        dx_C = osc_end_x + drift_end_x
-        dy_C = osc_end_y + drift_end_y
-    else:
-        phi0 = np.zeros(n_cycles)
-        phi_drift = np.zeros(n_cycles)
-
+    # --- Stitch into a global trajectory ------------------------------
     dx_cycle = dx_T + dx_S + dx_C
     dy_cycle = dy_T + dy_S + dy_C
     x = np.concatenate(([0.0], np.cumsum(dx_cycle)))
     y = np.concatenate(([0.0], np.cumsum(dy_cycle)))
     positions = np.column_stack([x, y])
 
-    cycle_durations = tau_T + tau_S + tau_C
+    cycle_durations = tau_T + T_phys_S + tau_C
     cycle_end_times = np.concatenate(([0.0], np.cumsum(cycle_durations)))
 
     return CycleTrajectory(
         positions=positions,
         cycle_end_times=cycle_end_times,
-        headings=theta,
-        phase_durations=phase_durations,
-        search_legs=search_legs,
-        climb_phase0=phi0,
-        climb_drift_angles=phi_drift,
-        climb_turn_periods=climb_turn_periods,
+        headings=headings,
+        phase_durations_active=np.column_stack([tau_T, tau_S, tau_C]),
+        search_episodes=search_episodes,
+        climb_initial_phase=phi0_n,
+        climb_drift_angle=phi_drift_n,
+        climb_turn_period=T_turn_n,
     )
 
 
-def _sample_ctrw_legs(
-    total_time: float,
-    alpha: float,
-    sigma_0: float,
-    tau_0: float,
-    v_c: float,
-    sigma_angular: float,
-    rng: np.random.Generator,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    r"""Sample a subordinated Lévy walk inside a search phase.
-
-    The process alternates ballistic legs (walker moves at speed
-    :math:`v_c`) with stationary waiting times (walker at rest). Legs
-    have exponential durations with scale :math:`\sigma_0`; waits have
-    Mittag-Leffler durations with stability :math:`\alpha` and scale
-    :math:`\tau_0`. Leg directions follow a Gaussian random walk on the
-    circle with per-step variance :math:`\sigma_{\mathrm{angular}}^2`,
-    initialised uniformly on :math:`[0, 2\pi)`.
-
-    The total physical time is enforced to equal ``total_time`` by
-    truncating the last interval (whether it is a leg or a wait).
-
-    Returns
-    -------
-    leg_durations : ndarray, shape (L,)
-        Duration of each ballistic leg. Positive.
-    wait_durations : ndarray, shape (L,)
-        Duration of each waiting time, one per leg, appearing *after*
-        the corresponding leg. May be zero if truncated.
-    leg_angles : ndarray, shape (L,)
-        Direction of each ballistic leg (rad).
-    leg_start_times : ndarray, shape (L,)
-        Physical time at the start of each leg, relative to the phase
-        onset.
-    """
-    if total_time <= 0:
-        return (np.array([]), np.array([]), np.array([]), np.array([]))
-
-    from distributions import MittagLeffler
-
-    batch = max(10, int(3 * total_time / (sigma_0 + tau_0)))
-    ml = MittagLeffler(alpha=alpha, tau_0=tau_0)
-
-    leg_durations = []
-    wait_durations = []
-    leg_angles = []
-    leg_start_times = []
-
-    psi = rng.uniform(0.0, 2 * np.pi)
-    elapsed = 0.0
-    while elapsed < total_time:
-        sigmas = rng.exponential(scale=sigma_0, size=batch)
-        waits = ml.sample(batch, rng)
-        xis = rng.normal(loc=0.0, scale=sigma_angular, size=batch)
-
-        for sigma_leg, wait_leg, xi_leg in zip(sigmas, waits, xis):
-            leg_remaining = total_time - elapsed
-            if leg_remaining <= 0:
-                break
-            # Truncate the leg if it overshoots
-            actual_leg = min(sigma_leg, leg_remaining)
-            leg_durations.append(actual_leg)
-            leg_angles.append(psi)
-            leg_start_times.append(elapsed)
-            elapsed += actual_leg
-            # Waiting time (may be truncated, may be zero)
-            wait_remaining = total_time - elapsed
-            if wait_remaining <= 0:
-                wait_durations.append(0.0)
-                break
-            actual_wait = min(wait_leg, wait_remaining)
-            wait_durations.append(actual_wait)
-            elapsed += actual_wait
-            # Update heading for next leg
-            psi = psi + xi_leg
-
-    return (
-        np.array(leg_durations),
-        np.array(wait_durations),
-        np.array(leg_angles),
-        np.array(leg_start_times),
-    )
-
-
-def _search_endpoint(
-    tau: float,
-    K_S: float,
-    H_S: float,
-    seed: int,
-) -> tuple[float, float]:
-    """[DEPRECATED] kept for backward compatibility of tests; see
-    :func:`_fbm_endpoint`."""
-    return _fbm_endpoint(tau=tau, sigma=K_S, H=H_S, seed=seed)
-
-
-def _fbm_covariance(times: np.ndarray, H: float, sigma: float) -> np.ndarray:
-    r"""Covariance matrix of 1-D fractional Brownian motion sampled at ``times``.
-
-    For fBm :math:`B_H(t)` with Hurst index :math:`H \\in (0,1)` and
-    scaling :math:`\sigma`, the covariance is
-
-    .. math::
-        \mathrm{Cov}[B_H(s), B_H(t)] =
-        \tfrac{\sigma^2}{2}\,(s^{2H} + t^{2H} - |t-s|^{2H}).
-
-    This ensures :math:`\mathrm{Var}[B_H(t)] = \sigma^2 t^{2H}` and
-    :math:`\mathrm{Var}[B_H(t)-B_H(s)] = \sigma^2 |t-s|^{2H}`.
-    """
-    s = times[:, None]
-    t = times[None, :]
-    return 0.5 * sigma**2 * (s ** (2 * H) + t ** (2 * H) - np.abs(t - s) ** (2 * H))
-
-
-def _sample_fbm_path_at_times(
-    tau: float,
-    sigma: float,
-    H: float,
-    times: np.ndarray,
-    seed: int,
+def interpolate_trajectory(
+    traj: CycleTrajectory,
+    config: SoaringConfig,
+    target_times: np.ndarray,
 ) -> np.ndarray:
-    r"""Sample a 2-D fractional Brownian motion path at the given times.
+    """Interpolate a :class:`CycleTrajectory` on the regular time grid
+    ``target_times``.
 
-    The two Cartesian components are independent fBm with Hurst index
-    :math:`H` and scaling :math:`\sigma` (m/s^H), satisfying
-    :math:`X(0) = 0`. Sampling is via Cholesky decomposition of the
-    covariance matrix on the requested times, :math:`O(N^3)` in
-    ``len(times)``.
+    Within each cycle the position evolves piecewise:
 
-    Parameters
-    ----------
-    tau : float
-        Total duration of the phase (s). Used only to clip ``times``
-        into :math:`[0, \tau]` and to ensure the endpoint is present.
-    sigma : float
-        Scaling parameter of the fBm (m/s^H).
-    H : float
-        Hurst exponent, 0 < H < 1.
-    times : ndarray, shape (N,)
-        Query times in [0, tau].
-    seed : int
-        RNG seed for reproducibility.
+    - **Transition**: straight line at ``v_xy * ê(theta_n)``.
+    - **Search**: piecewise according to the local-CTRW legs (constant
+      velocity inside each leg, stationary during turning waits).
+    - **Climb**: circular motion + drift from the search endpoint.
 
     Returns
     -------
-    ndarray, shape (N, 2)
+    ndarray, shape ``(len(target_times), 2)``
     """
-    if tau <= 0 or len(times) == 0 or sigma == 0:
-        return np.zeros((len(times), 2))
+    n_cycles = traj.n_cycles
+    cycle_end_times = traj.cycle_end_times
+    tau_T = traj.phase_durations_active[:, 0]
+    T_phys_S = traj.search_T_phys
+    tau_C = traj.phase_durations_active[:, 2]
 
-    t = np.clip(times.astype(float), 0.0, tau)
+    out = np.zeros((len(target_times), 2))
 
-    # Build time grid: prepend 0 and tau so that endpoint sampling is
-    # consistent across invocations with different query times.
-    t_unique, inverse_map = np.unique(
-        np.concatenate([[0.0, tau], t]),
-        return_inverse=True,
+    cycle_idx = np.searchsorted(cycle_end_times, target_times, side="right") - 1
+    cycle_idx = np.clip(cycle_idx, 0, n_cycles - 1)
+
+    u_S = config.search_motion.u_S if config.search_motion is not None else 0.0
+    r0 = config.climb_motion.r0 if config.climb_motion is not None else 0.0
+    v_drift = (
+        config.climb_motion.v_drift if config.climb_motion is not None else 0.0
     )
 
-    t_pos = t_unique[t_unique > 0]
-    cov = _fbm_covariance(t_pos, H=H, sigma=sigma)
-    cov = cov + 1e-12 * np.eye(len(t_pos))
-    L = np.linalg.cholesky(cov)
+    for n in range(n_cycles):
+        mask = cycle_idx == n
+        if not np.any(mask):
+            continue
 
-    sub_rng = np.random.default_rng(seed)
-    z = sub_rng.standard_normal(size=(len(t_pos), 2))
-    X_pos = L @ z
+        t_in_cycle = target_times[mask] - cycle_end_times[n]
+        theta_n = traj.headings[n]
+        P_n = traj.positions[n]
 
-    X_full = np.zeros((len(t_unique), 2))
-    X_full[1:] = X_pos
+        # Endpoint of transition.
+        dxT = config.v_xy * tau_T[n] * np.cos(theta_n)
+        dyT = config.v_xy * tau_T[n] * np.sin(theta_n)
+        T_end = P_n + np.array([dxT, dyT])
 
-    return X_full[inverse_map[2:]]
+        # Endpoint of search.
+        ep = traj.search_episodes[n]
+        dxS, dyS = ep.endpoint(u_S)
+        S_end = T_end + np.array([dxS, dyS])
+
+        # Classify times by phase boundary.
+        boundary_TS = tau_T[n]
+        boundary_SC = tau_T[n] + T_phys_S[n]
+        boundary_end = boundary_SC + tau_C[n]
+
+        in_T = t_in_cycle < boundary_TS
+        in_S = (~in_T) & (t_in_cycle < boundary_SC)
+        in_C = ~(in_T | in_S)
+
+        seg = np.empty((len(t_in_cycle), 2))
+
+        if np.any(in_T):
+            t_T = t_in_cycle[in_T]
+            seg[in_T, 0] = P_n[0] + config.v_xy * t_T * np.cos(theta_n)
+            seg[in_T, 1] = P_n[1] + config.v_xy * t_T * np.sin(theta_n)
+
+        if np.any(in_S):
+            if config.search_motion is not None and ep.T_phys > 0:
+                t_S = t_in_cycle[in_S] - boundary_TS
+                xy_S = _search_position(t_S, ep, u_S)
+                seg[in_S, 0] = T_end[0] + xy_S[:, 0]
+                seg[in_S, 1] = T_end[1] + xy_S[:, 1]
+            else:
+                seg[in_S] = T_end
+
+        if np.any(in_C):
+            if config.climb_motion is not None:
+                t_C = np.clip(t_in_cycle[in_C] - boundary_SC, 0.0, tau_C[n])
+                omega = 2.0 * np.pi / traj.climb_turn_period[n]
+                xy_C = _climb_position(
+                    t=t_C,
+                    r0=r0,
+                    omega=omega,
+                    phi0=traj.climb_initial_phase[n],
+                    v_drift=v_drift,
+                    phi_drift=traj.climb_drift_angle[n],
+                )
+                seg[in_C] = S_end + xy_C
+            else:
+                seg[in_C] = S_end
+
+        # Points past the last cycle are pinned to the end of the trajectory.
+        past_end = t_in_cycle >= boundary_end
+        if np.any(past_end):
+            # Use the cycle-end position from the global trajectory to remain
+            # consistent with positions[n + 1].
+            seg[past_end] = traj.positions[n + 1]
+
+        out[mask] = seg
+
+    return out
 
 
-# Backward-compatibility alias for deprecated tests
-_sample_search_path_at_times = _sample_fbm_path_at_times
+def _estimate_mean_cycle_duration(config: SoaringConfig) -> float:
+    """Heuristic for the mean physical cycle duration (used to budget
+    the number of cycles per trajectory).
+
+    Under the physical-duration stopping rule the search-phase physical
+    time equals the Lomax-sampled ``tau_S^n`` (its mean is the Lomax
+    mean), in both bare and full configurations. The transition and
+    climb physical durations also coincide with their Lomax /
+    exponential draws.
+    """
+    s_T = config.transition.build().mean
+    s_S = config.search.build().mean
+    s_C = config.climb.build().mean
+
+    return float(_finite(s_T) + _finite(s_S) + _finite(s_C))
+
+
+def _finite(x: float) -> float:
+    return x if np.isfinite(x) else 1e3
 
 
 def simulate_ensemble(
@@ -412,30 +628,11 @@ def simulate_ensemble(
     rng: np.random.Generator,
     cycles_safety_factor: float = 3.0,
 ) -> np.ndarray:
-    """Generate an ensemble of trajectories on a regular time grid.
+    """Generate ``n_trajectories`` trajectories of ``total_time`` seconds
+    sampled on a regular grid of step ``dt``.
 
-    See module docstring for the treatment of intra-phase motion.
-
-    Parameters
-    ----------
-    config : SoaringConfig
-        Model parameters.
-    n_trajectories : int
-        Ensemble size.
-    total_time : float
-        Physical duration (seconds) of each interpolated trajectory.
-    dt : float
-        Sampling interval (seconds).
-    rng : numpy.random.Generator
-        Pre-seeded RNG.
-    cycles_safety_factor : float, optional
-        Multiplier on the expected number of cycles to cover
-        ``total_time``.
-
-    Returns
-    -------
-    ndarray, shape (n_trajectories, n_steps, 2)
-        Sampled positions, where ``n_steps = int(total_time / dt) + 1``.
+    Returns an array of shape ``(n_trajectories, n_steps, 2)`` with
+    ``n_steps = int(total_time / dt) + 1``.
     """
     if n_trajectories <= 0:
         raise ValueError(f"n_trajectories must be positive, got {n_trajectories}")
@@ -445,7 +642,7 @@ def simulate_ensemble(
         raise ValueError(f"dt must be positive, got {dt}")
 
     mean_cycle = _estimate_mean_cycle_duration(config)
-    n_cycles_initial = max(1, int(cycles_safety_factor * total_time / mean_cycle))
+    n_cycles_initial = max(2, int(cycles_safety_factor * total_time / mean_cycle))
 
     time_grid = np.arange(0.0, total_time + dt, dt)
     n_steps = len(time_grid)
@@ -458,275 +655,5 @@ def simulate_ensemble(
             if traj.total_time >= total_time:
                 break
             n_cycles *= 2
-
-        ensemble[i] = _interpolate_physical(
-            traj=traj,
-            config=config,
-            target_times=time_grid,
-        )
+        ensemble[i] = interpolate_trajectory(traj, config, time_grid)
     return ensemble
-
-
-def _estimate_mean_cycle_duration(config: SoaringConfig) -> float:
-    """Return a finite estimate of the mean cycle duration."""
-
-    def _finite_mean(phase_cfg) -> float:
-        sampler = phase_cfg.build()
-        m = sampler.mean
-        if np.isfinite(m):
-            return float(m)
-        return 10.0 * float(phase_cfg.params.get("tau_min", 1.0))
-
-    return (
-        _finite_mean(config.transition)
-        + _finite_mean(config.search)
-        + _finite_mean(config.climb)
-    )
-
-
-def _interpolate_physical(
-    traj: CycleTrajectory,
-    config: SoaringConfig,
-    target_times: np.ndarray,
-) -> np.ndarray:
-    """Interpolate the cycle-level trajectory to a regular time grid.
-
-    Within each cycle ``n`` the position evolves as:
-
-    - **Transition** (0 ≤ t − t_start < τ^T): linear motion at
-      ``v_xy·ê(θ_n)`` from the cycle-start position.
-
-    - **Search** (τ^T ≤ t − t_start < τ^T + τ^S): velocity-limited
-      CTRW built from ``traj.search_legs[n] = (durations, angles)``.
-      Position evolves linearly within each leg at velocity
-      ``v_c_S·ê(angle)``. The CTRW starts at the transition endpoint
-      ``T_n``. If ``search_motion is None``, the walker is held at
-      ``T_n``.
-
-    - **Climb** (t − t_start ≥ τ^T + τ^S): velocity-limited CTRW with
-      climb parameters, starting from ``S_n`` (end of search),
-      plus a linear drift ``v_drift·ê(phi)·c``. If ``climb_motion is
-      None``, held at ``S_n``.
-    """
-    n_cycles = traj.n_cycles
-    positions = traj.positions
-    cycle_end_times = traj.cycle_end_times
-    tau_T = traj.phase_durations[:, 0]
-    tau_S = traj.phase_durations[:, 1]
-    tau_C = traj.phase_durations[:, 2]
-    headings = traj.headings
-
-    out = np.zeros((len(target_times), 2), dtype=float)
-
-    cycle_idx = np.searchsorted(cycle_end_times, target_times, side="right") - 1
-    cycle_idx = np.clip(cycle_idx, 0, n_cycles - 1)
-
-    for n in range(n_cycles):
-        mask = cycle_idx == n
-        if not np.any(mask):
-            continue
-
-        t_in_cycle = target_times[mask] - cycle_end_times[n]
-        tau_T_n = tau_T[n]
-        tau_S_n = tau_S[n]
-        tau_C_n = tau_C[n]
-        theta_n = headings[n]
-        P_n = positions[n]
-
-        # Transition endpoint
-        dx_T_n = config.v_xy * tau_T_n * np.cos(theta_n)
-        dy_T_n = config.v_xy * tau_T_n * np.sin(theta_n)
-        T_n = P_n + np.array([dx_T_n, dy_T_n])
-
-        # Compute search-phase endpoint S_n by summing leg displacements
-        if config.search_motion is not None and tau_S_n > 0:
-            leg_d, _wait_d, angs_S, _leg_t0 = traj.search_legs[n]
-            v_c_S = config.search_motion.v_c_S
-            S_n = T_n + np.array([
-                v_c_S * np.sum(leg_d * np.cos(angs_S)),
-                v_c_S * np.sum(leg_d * np.sin(angs_S)),
-            ])
-        else:
-            S_n = T_n
-
-        # Classify target times by phase
-        in_T = t_in_cycle < tau_T_n
-        in_S = (~in_T) & (t_in_cycle < tau_T_n + tau_S_n)
-        in_C = ~(in_T | in_S)
-
-        out_slice = np.zeros((len(t_in_cycle), 2), dtype=float)
-
-        # --- Transition ---
-        if np.any(in_T):
-            t_T = t_in_cycle[in_T]
-            out_slice[in_T, 0] = P_n[0] + config.v_xy * t_T * np.cos(theta_n)
-            out_slice[in_T, 1] = P_n[1] + config.v_xy * t_T * np.sin(theta_n)
-
-        # --- Search ---
-        if np.any(in_S):
-            s_t = t_in_cycle[in_S] - tau_T_n
-            if config.search_motion is not None:
-                leg_d, wait_d, angs_S, leg_t0 = traj.search_legs[n]
-                v_c_S = config.search_motion.v_c_S
-                xy_S = _search_ctrw_positions_at_times(
-                    leg_durations=leg_d,
-                    wait_durations=wait_d,
-                    leg_angles=angs_S,
-                    leg_start_times=leg_t0,
-                    v_c=v_c_S,
-                    times=s_t,
-                )
-                out_slice[in_S, 0] = T_n[0] + xy_S[:, 0]
-                out_slice[in_S, 1] = T_n[1] + xy_S[:, 1]
-            else:
-                out_slice[in_S] = T_n
-
-        # --- Climb ---
-        if np.any(in_C):
-            c_t = t_in_cycle[in_C] - tau_T_n - tau_S_n
-            c_t = np.clip(c_t, 0.0, tau_C_n)
-            if config.climb_motion is not None:
-                r0 = config.climb_motion.thermal_radius
-                T_turn_n = traj.climb_turn_periods[n]
-                omega_n = 2 * np.pi / T_turn_n
-                v_drift = config.climb_motion.v_drift
-                phi0 = traj.climb_phase0[n]
-                phi_drift = traj.climb_drift_angles[n]
-
-                # Oscillator displacement from start of climb
-                osc_dx = r0 * (np.cos(omega_n * c_t + phi0) - np.cos(phi0))
-                osc_dy = r0 * (np.sin(omega_n * c_t + phi0) - np.sin(phi0))
-                # Linear drift
-                drift_dx = v_drift * c_t * np.cos(phi_drift)
-                drift_dy = v_drift * c_t * np.sin(phi_drift)
-
-                out_slice[in_C, 0] = S_n[0] + osc_dx + drift_dx
-                out_slice[in_C, 1] = S_n[1] + osc_dy + drift_dy
-            else:
-                out_slice[in_C] = S_n
-
-        out[mask] = out_slice
-
-    return out
-
-
-def _ctrw_positions_at_times(
-    leg_durations: np.ndarray,
-    leg_angles: np.ndarray,
-    velocity: float,
-    times: np.ndarray,
-) -> np.ndarray:
-    """Position of a piecewise-linear CTRW at queried times.
-
-    The CTRW starts at the origin at time 0, and during each leg moves
-    at constant velocity ``velocity`` in direction ``leg_angles[i]``
-    for a duration ``leg_durations[i]``. Returns positions at
-    ``times``, linearly interpolated inside legs.
-
-    Parameters
-    ----------
-    leg_durations : ndarray, shape (L,)
-    leg_angles : ndarray, shape (L,)
-    velocity : float
-    times : ndarray, shape (N,)
-        Query times in [0, sum(leg_durations)]. Out-of-range times
-        are clipped.
-    """
-    n = len(times)
-    if len(leg_durations) == 0 or n == 0:
-        return np.zeros((n, 2))
-
-    leg_ends = np.cumsum(leg_durations)
-    total_duration = leg_ends[-1]
-    t_clip = np.clip(times, 0.0, total_duration)
-
-    # Positions at the end of each leg
-    leg_dx = velocity * leg_durations * np.cos(leg_angles)
-    leg_dy = velocity * leg_durations * np.sin(leg_angles)
-    cum_x = np.concatenate(([0.0], np.cumsum(leg_dx)))
-    cum_y = np.concatenate(([0.0], np.cumsum(leg_dy)))
-    leg_starts = np.concatenate(([0.0], leg_ends[:-1]))
-
-    # Find the leg containing each query time
-    leg_idx = np.searchsorted(leg_ends, t_clip, side="right")
-    leg_idx = np.clip(leg_idx, 0, len(leg_durations) - 1)
-
-    # Linear interpolation within the leg
-    t_rel = t_clip - leg_starts[leg_idx]
-    x_start = cum_x[leg_idx]
-    y_start = cum_y[leg_idx]
-    x = x_start + velocity * t_rel * np.cos(leg_angles[leg_idx])
-    y = y_start + velocity * t_rel * np.sin(leg_angles[leg_idx])
-
-    return np.column_stack([x, y])
-
-
-def _search_ctrw_positions_at_times(
-    leg_durations: np.ndarray,
-    wait_durations: np.ndarray,
-    leg_angles: np.ndarray,
-    leg_start_times: np.ndarray,
-    v_c: float,
-    times: np.ndarray,
-) -> np.ndarray:
-    r"""Position of a subordinated Lévy walk at queried times.
-
-    The walker starts at the origin at phase time 0. For each index
-    ``k``, the walker moves ballistically at speed ``v_c`` in direction
-    ``leg_angles[k]`` from ``leg_start_times[k]`` for a duration
-    ``leg_durations[k]`` (the *leg*), then sits still for
-    ``wait_durations[k]`` (the *wait*), before the next leg begins.
-
-    Parameters
-    ----------
-    leg_durations, wait_durations, leg_angles, leg_start_times :
-        Arrays of the same length produced by :func:`_sample_ctrw_legs`.
-    v_c : float
-        Walker speed during ballistic legs.
-    times : ndarray, shape (N,)
-        Query times in [0, total_phase_duration].
-
-    Returns
-    -------
-    ndarray, shape (N, 2)
-    """
-    n = len(times)
-    if len(leg_durations) == 0 or n == 0:
-        return np.zeros((n, 2))
-
-    # Endpoint of each leg (position at leg_start + leg_duration)
-    jx = v_c * leg_durations * np.cos(leg_angles)
-    jy = v_c * leg_durations * np.sin(leg_angles)
-    cum_x_end = np.cumsum(jx)
-    cum_y_end = np.cumsum(jy)
-    # Starting position of leg k (cumulative up through leg k-1)
-    start_x = np.concatenate(([0.0], cum_x_end[:-1]))
-    start_y = np.concatenate(([0.0], cum_y_end[:-1]))
-    # Leg end times (t when the leg finishes moving)
-    leg_end_times = leg_start_times + leg_durations
-
-    total_duration = leg_start_times[-1] + leg_durations[-1] + wait_durations[-1]
-    t_clip = np.clip(times, 0.0, total_duration)
-
-    # For each query time, determine which leg/wait it falls in.
-    # Leg k is active for t in [leg_start_times[k], leg_end_times[k])
-    # Wait k follows, for t in [leg_end_times[k], leg_end_times[k] + wait_durations[k])
-    # We use searchsorted on leg_start_times to find the relevant leg index.
-    idx = np.searchsorted(leg_start_times, t_clip, side="right") - 1
-    idx = np.clip(idx, 0, len(leg_durations) - 1)
-
-    x_out = np.zeros(n)
-    y_out = np.zeros(n)
-    for i in range(n):
-        k = idx[i]
-        t_local = t_clip[i] - leg_start_times[k]
-        if t_local <= leg_durations[k]:
-            # Inside the ballistic leg k
-            x_out[i] = start_x[k] + v_c * t_local * np.cos(leg_angles[k])
-            y_out[i] = start_y[k] + v_c * t_local * np.sin(leg_angles[k])
-        else:
-            # Inside the wait after leg k: walker at leg-k end position
-            x_out[i] = cum_x_end[k]
-            y_out[i] = cum_y_end[k]
-
-    return np.column_stack([x_out, y_out])
