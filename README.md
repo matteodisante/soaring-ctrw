@@ -41,24 +41,23 @@ Intra-phase dynamics:
   an independent uniform direction per cycle.
 
 The single phenomenological parameter introduced beyond what the data
-fix is the cycle-to-cycle heading dispersion ``σ_θ``. The manuscript
-shows that the iso-contour ``H_eff = 0.88`` is pinned at a common
-``σ_θ`` essentially independently of the aircraft-specific
-``μ_T`` — this is the analytical origin of the empirical universality
-``H ≈ 0.88``.
+fix is the cycle-to-cycle heading dispersion ``σ_θ``, calibrated
+per aircraft against the empirical ``H ≈ 0.88``.
 
 ## Repository layout
 
 ```
 soaring-ctrw/
 ├── src/
-│   ├── distributions.py   # Pareto, Lomax, Exponential, Mittag-Leffler
-│   ├── model.py           # SoaringConfig, SearchMotionConfig, ClimbMotionConfig, ...
-│   ├── simulation.py      # simulate_single, simulate_ensemble, interpolate_trajectory
-│   ├── observables.py     # time-averaged MSD (FFT), Hurst-exponent fit
-│   ├── calibration.py     # read/write outputs/data/calibration/<aircraft>.yaml; apply_calibration
-│   ├── cache.py           # script-side NPZ + manifest cache for Monte-Carlo runs
-│   └── paths.py           # repo-relative output paths
+│   └── soaring_ctrw/
+│       ├── __init__.py
+│       ├── distributions.py   # Pareto, Lomax, Exponential, Mittag-Leffler
+│       ├── model.py           # SoaringConfig, SearchMotionConfig, ClimbMotionConfig, ...
+│       ├── simulation.py      # simulate_single, simulate_ensemble, interpolate_trajectory
+│       ├── observables.py     # time-averaged MSD (FFT), Hurst-exponent fit
+│       ├── calibration.py     # read/write outputs/data/calibration/<aircraft>.yaml; apply_calibration
+│       ├── cache.py           # script-side NPZ + manifest cache for Monte-Carlo runs
+│       └── paths.py           # repo-relative output paths
 ├── configs/
 │   ├── paragliders.yaml   # Table 1 of the manuscript
 │   ├── hang_gliders.yaml
@@ -89,13 +88,20 @@ or PNG under ``outputs/figures/``, numerical arrays as NPZ under
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev]" --config-settings editable_mode=compat
 ```
 
-The package exposes its modules at the top level (``model``,
-``simulation``, ``distributions``, ``observables``, ``paths``), so
-``from model import SoaringConfig`` works out of the box once
-installed in editable mode.
+The package is installed as `soaring_ctrw`; modules are imported with
+the usual namespace, e.g. ``from soaring_ctrw.model import
+SoaringConfig``.
+
+The `editable_mode=compat` flag is required on Python 3.14, which
+ignores hidden `.pth` files (those starting with `_`) for security
+reasons. Without it, setuptools' default editable install writes a
+`__editable__.<project>.pth` file that is silently skipped and the
+package fails to import. The compat mode falls back to the legacy
+`easy-install.pth` scheme that Python 3.14 still loads. Requires
+`setuptools >= 64`.
 
 ## Reproducing the figures
 
