@@ -23,8 +23,8 @@ Two modes are produced independently:
               and climb phases consume their (Lomax / exponential)
               durations but contribute no horizontal motion.
   ``full``  — all three phases active with their intra-phase dynamics
-              (search active-budget local CTRW + climb circling+drift)
-              exactly as defined in the YAML.
+              (search local CTRW + climb circling+drift) exactly as
+              defined in the YAML.
 
 Cache policy: identical to other scripts (see ``cache.py``).
 

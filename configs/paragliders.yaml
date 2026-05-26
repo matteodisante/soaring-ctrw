@@ -17,10 +17,11 @@
 #                               m_{1/2}=0.6057 from calculate_mit.py)
 #   Omega_S     = 0.27 s^-1    (v_xy^25 / R_th^25, Fig. 4b/4h)
 #   r0          = 39.0 m       (Fig. 4h, median thermalling radius)
-#   T_turn_mean = 60 s
-#   T_turn_std  = 35 s         (climb MSD plateau, Fig. 3a)
+#   T_turn_mean = 30 s
+#   T_turn_std  = 10 s
 #   v_drift     = 1.9 m/s      (large-lag climb MSD slope, Fig. 3a)
-#   sigma_theta = 0.35 rad     (analytic universal value, phase diagram)
+#   sigma_theta = set by scripts/estimate_sigma_theta.py from the
+#                 H_eff = 0.88 calibration condition
 name: paragliders
 v_xy: 10.06
 

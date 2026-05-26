@@ -206,8 +206,8 @@ class SoaringConfig:
     # The intra-phase dynamics are optional; when ``None`` the
     # corresponding phase contributes no horizontal displacement and the
     # cycle clock advances by the Lomax/exponential duration draw. This
-    # is the "bare-cycle" variant used to generate the phase diagram of
-    # H_eff(mu_T, sigma_theta) cleanly.
+    # is the "bare-cycle" variant, in which only the transition phase
+    # carries displacement.
     search_motion: SearchMotionConfig | None = None
     climb_motion: ClimbMotionConfig | None = None
 
@@ -218,8 +218,10 @@ class SoaringConfig:
     def bare(self) -> "SoaringConfig":
         """Return a copy with search_motion and climb_motion stripped.
 
-        Useful for the phase-diagram analysis, where only the transition
-        dynamics carry a non-trivial heading-correlated displacement.
+        In the bare-cycle variant only the transition phase carries a
+        non-trivial heading-correlated displacement; search and climb
+        consume their sampled durations but contribute no horizontal
+        motion.
         """
         return SoaringConfig(
             name=self.name + "_bare",

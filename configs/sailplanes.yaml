@@ -7,7 +7,7 @@
 #   mu_T        = 2.62
 #   mu_S        = 2.90
 #   tau_0^T     = 500  s
-#   tau_0^S     = 75   s
+#   tau_0^S     = 100  s
 #   mu_C_eff    = 110  s
 #   alpha_S     = 0.4
 #   tau_b^S     = 10   s
@@ -16,9 +16,10 @@
 #   Omega_S     = 0.29 s^-1
 #   r0          = 129.9 m
 #   T_turn_mean = 25 s
-#   T_turn_std  = 30 s
+#   T_turn_std  = 10 s
 #   v_drift     = 4.34 m/s
-#   sigma_theta = 0.35 rad
+#   sigma_theta = set by scripts/estimate_sigma_theta.py from the
+#                 H_eff = 0.88 calibration condition
 name: sailplanes
 v_xy: 35.85
 
