@@ -471,9 +471,10 @@ def main() -> None:
         f"{args.n_cycles} cycles per aircraft)..."
     )
     cycle_msd: dict[str, np.ndarray] = {}
-    for ac in args.aircraft:
-        rng = np.random.default_rng(args.seed_cycles
-                                     + abs(hash(ac)) % (2 ** 31))
+    for i, ac in enumerate(args.aircraft):
+        # Deterministic per-aircraft offset (avoid Python's randomised
+        # str hash, which makes runs non-reproducible across processes).
+        rng = np.random.default_rng(args.seed_cycles + i)
         cycle_msd[ac] = simulate_cycle_msd(
             configs[ac], n_cycles=args.n_cycles,
             n_traj=args.n_traj_cycles, rng=rng,
