@@ -36,9 +36,29 @@ Outputs per aircraft (under ``outputs/``):
 
 from __future__ import annotations
 
+import os
+
+# Cap BLAS / OpenMP thread pools to 1 by default. We parallelise this
+# script across aircraft with ProcessPoolExecutor; without these caps,
+# every worker process would itself spawn cpu_count() native threads
+# (numpy linked against Accelerate / OpenBLAS / MKL), oversubscribing
+# the CPU and *slowing* the run. ``setdefault`` lets the user override
+# from the shell (``OMP_NUM_THREADS=4 python scripts/...``) if a single
+# aircraft run is preferred. Must run BEFORE numpy / scipy import.
+for _var in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "BLIS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+):
+    os.environ.setdefault(_var, "1")
+
 import argparse
 import logging
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import matplotlib
@@ -123,6 +143,7 @@ def _compute_curve(
     fit_max: float,
     rng: np.random.Generator,
     logger: logging.Logger,
+    prefix: str = "",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return ``(H_array, msd_matrix)`` for one (aircraft, mode).
 
@@ -159,9 +180,9 @@ def _compute_curve(
             f"[{k+1:>2}/{len(sigma_grid)}] mode={mode}  "
             f"sigma_theta={sigma:5.3f}  H_eff={h_str}  ({t_cell:.1f}s)"
         )
-        print(f"  {msg}")
+        print(f"{prefix}  {msg}", flush=True)
         logger.info("%s", msg)
-    print(f"  total wall time ({mode}): {t_total/60:.2f} min")
+    print(f"{prefix}  total wall time ({mode}): {t_total/60:.2f} min", flush=True)
     logger.info("total wall time mode=%s: %.2f min", mode, t_total / 60)
     return H_array, msd_matrix
 
@@ -296,6 +317,205 @@ def _plot_overlay(
 
 
 # ---------------------------------------------------------------------------
+# Per-aircraft worker (parallelisable across processes)
+# ---------------------------------------------------------------------------
+
+
+def _process_aircraft(
+    aircraft: str,
+    args: argparse.Namespace,
+    sigma_grid: np.ndarray,
+) -> dict:
+    """Run the full σ_θ scan for one aircraft.
+
+    Self-contained so it can be dispatched to a worker process.
+    Each aircraft writes to its own log file under ``args.logs_dir`` and
+    prefixes stdout lines with ``[aircraft]`` so that parallel output
+    remains readable.
+    """
+    prefix = f"[{aircraft}]"
+
+    log_path = args.logs_dir / f"{SCRIPT_SLUG}_{aircraft}_{int(time.time())}_{os.getpid()}.log"
+    logger = logging.getLogger(f"{SCRIPT_SLUG}.{aircraft}")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    # Avoid duplicate handlers if the worker reuses the logger object.
+    for h in list(logger.handlers):
+        logger.removeHandler(h)
+    fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+    fh = logging.FileHandler(log_path)
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+
+    print(f"{prefix} start  log={log_path}", flush=True)
+    logger.info("aircraft=%s pid=%d", aircraft, os.getpid())
+
+    base = SoaringConfig.from_yaml(CONFIGS_DIR / f"{aircraft}.yaml")
+    results: dict[str, dict] = {}
+
+    for mode in args.mode:
+        rng = np.random.default_rng(_seed_from(args.seed, aircraft, mode))
+
+        slot = f"{aircraft}_{mode}"
+        npz_path, manifest_path = slot_paths(args.data_dir, SCRIPT_SLUG, slot)
+        requested_manifest = build_manifest(
+            script=SCRIPT_SLUG,
+            params={
+                "mode": mode,
+                "n_sigma": args.n_sigma,
+                "sigma_min": args.sigma_min,
+                "sigma_max": args.sigma_max,
+                "n_trajectories": args.n_trajectories,
+                "total_time": args.total_time,
+                "dt": args.dt,
+                "fit_min": args.fit_min,
+                "fit_max": args.fit_max,
+                "seed": args.seed,
+                "msd_estimator": "ea",
+            },
+            config_paths={"aircraft": CONFIGS_DIR / f"{aircraft}.yaml"},
+        )
+
+        decision = decide_action(
+            npz_path=npz_path,
+            manifest_path=manifest_path,
+            requested_manifest=requested_manifest,
+            mode=args.cache,
+            slot_label=f"{SCRIPT_SLUG}/{slot}",
+        )
+        if decision.diff:
+            print(f"{prefix}  [{mode}] cache params differ:", flush=True)
+            for line in decision.diff:
+                print(f"{prefix}    - {line}", flush=True)
+        print(
+            f"{prefix}  [{mode}] cache decision: {decision.action}  "
+            f"({decision.reason})",
+            flush=True,
+        )
+        logger.info("mode=%s decision=%s (%s) diff=%s",
+                    mode, decision.action, decision.reason, decision.diff)
+
+        if decision.action == "reuse":
+            arrays, _ = load_dataset(npz_path, manifest_path)
+            H_array = arrays["H_array"]
+            msd_matrix = arrays.get("msd_matrix")
+            sigma_grid_cached = arrays["sigma_grid"]
+            if not np.allclose(sigma_grid_cached, sigma_grid):
+                sigma_grid = sigma_grid_cached
+        else:
+            H_array, msd_matrix = _compute_curve(
+                base, mode, sigma_grid,
+                n_trajectories=args.n_trajectories,
+                total_time=args.total_time,
+                dt=args.dt,
+                fit_min=args.fit_min,
+                fit_max=args.fit_max,
+                rng=rng,
+                logger=logger,
+                prefix=prefix,
+            )
+            if args.cache != "off":
+                save_dataset(
+                    npz_path=npz_path,
+                    manifest_path=manifest_path,
+                    manifest=requested_manifest,
+                    arrays={
+                        "sigma_grid": sigma_grid,
+                        "H_array": H_array,
+                        "msd_matrix": msd_matrix,
+                    },
+                )
+                print(f"{prefix}  [{mode}] saved data: {npz_path}", flush=True)
+                logger.info("saved data: %s", npz_path)
+
+        sigma_star = _sigma_at_H(sigma_grid, H_array, H_EMPIRICAL)
+        if sigma_star is None:
+            print(
+                f"{prefix}  [{mode}] WARNING: H={H_EMPIRICAL} not reached in "
+                f"σ_θ ∈ [{args.sigma_min}, {args.sigma_max}].",
+                flush=True,
+            )
+            logger.warning("mode=%s sigma_star not found", mode)
+        else:
+            print(
+                f"{prefix}  [{mode}] σ_θ* (H={H_EMPIRICAL}) = "
+                f"{sigma_star:.4f} rad",
+                flush=True,
+            )
+            logger.info("mode=%s sigma_star=%.4f", mode, sigma_star)
+
+        results[mode] = {
+            "sigma_grid": sigma_grid,
+            "H_array": H_array,
+            "msd_matrix": msd_matrix,
+            "sigma_star": sigma_star,
+        }
+
+    if results:
+        overlay_path = (
+            args.figures_dir / f"{SCRIPT_SLUG}_{aircraft}_overlay.pdf"
+        )
+        _plot_overlay(
+            aircraft=aircraft,
+            results=results,
+            fit_min=args.fit_min,
+            fit_max=args.fit_max,
+            output_path=overlay_path,
+        )
+        print(f"{prefix}  overlay saved: {overlay_path}", flush=True)
+        logger.info("saved overlay: %s", overlay_path)
+
+    if args.write:
+        by_mode = {
+            mode: (float(res["sigma_star"])
+                   if res["sigma_star"] is not None else None)
+            for mode, res in results.items()
+        }
+        primary_mode = "full" if "full" in by_mode else next(iter(by_mode))
+        primary_value = by_mode.get(primary_mode)
+        if primary_value is None:
+            print(
+                f"{prefix}  WARNING: no sigma_star found; "
+                "calibration YAML not updated.",
+                flush=True,
+            )
+        else:
+            payload = {
+                "source_script": "estimate_sigma_theta",
+                "value": primary_value,
+                "mode": primary_mode,
+                "by_mode": by_mode,
+                "H_target": float(H_EMPIRICAL),
+                "fit_window": [float(args.fit_min), float(args.fit_max)],
+                "sigma_grid": [float(args.sigma_min), float(args.sigma_max),
+                               int(args.n_sigma)],
+                "n_trajectories": int(args.n_trajectories),
+                "total_time": float(args.total_time),
+                "dt": float(args.dt),
+                "seed": int(args.seed),
+            }
+            out = write_calibration_section(aircraft, "sigma_theta", payload)
+            print(
+                f"{prefix}  wrote {out}  (section: sigma_theta, "
+                f"value={primary_value:.4f} rad, mode={primary_mode})",
+                flush=True,
+            )
+            logger.info("wrote sigma_theta to %s", out)
+
+    fh.close()
+    logger.removeHandler(fh)
+
+    # Strip non-picklable / heavy fields before returning to the parent.
+    summary = {
+        mode: {
+            "sigma_star": res["sigma_star"],
+        }
+        for mode, res in results.items()
+    }
+    return {"aircraft": aircraft, "summary": summary, "log_path": str(log_path)}
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -350,6 +570,15 @@ def main() -> None:
             "`full`-cycle value is used as the canonical `value`."
         ),
     )
+    parser.add_argument(
+        "--workers", type=int, default=0,
+        help=(
+            "Number of worker processes used to parallelise the scan "
+            "across aircraft (each aircraft is independent). "
+            "0 (default) picks min(#aircraft, os.cpu_count()). "
+            "Use 1 to run serially."
+        ),
+    )
     add_cache_args(parser)
     args = parser.parse_args()
 
@@ -357,19 +586,28 @@ def main() -> None:
     args.data_dir.mkdir(parents=True, exist_ok=True)
     args.logs_dir.mkdir(parents=True, exist_ok=True)
 
-    log_path = args.logs_dir / f"{SCRIPT_SLUG}_{int(time.time())}.log"
+    # Parent-process orchestration log. Per-aircraft workers write their
+    # own log file (see _process_aircraft); we just record dispatch here.
+    parent_log = args.logs_dir / f"{SCRIPT_SLUG}_main_{int(time.time())}.log"
     logger = logging.getLogger(SCRIPT_SLUG)
     logger.setLevel(logging.INFO)
     logger.propagate = False
+    for h in list(logger.handlers):
+        logger.removeHandler(h)
     fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
-    fh = logging.FileHandler(log_path)
+    fh = logging.FileHandler(parent_log)
     fh.setFormatter(fmt)
     logger.addHandler(fh)
 
-    print(f"Logging to: {log_path}")
+    print(f"Main log: {parent_log}")
     logger.info("start run; args=%s", vars(args))
 
     sigma_grid = np.linspace(args.sigma_min, args.sigma_max, args.n_sigma)
+
+    n_workers = args.workers
+    if n_workers <= 0:
+        n_workers = min(len(args.aircraft), os.cpu_count() or 1)
+    n_workers = max(1, min(n_workers, len(args.aircraft)))
 
     print(
         f"1-D σ_θ scan to estimate σ_θ* from H_eff = {H_EMPIRICAL}.\n"
@@ -377,156 +615,33 @@ def main() -> None:
         f"σ_θ grid: {args.n_sigma} points in [{args.sigma_min:g}, {args.sigma_max:g}].\n"
         f"Per cell: {args.n_trajectories} traj × {args.total_time:.0f} s, "
         f"fit window [{args.fit_min:g}, {args.fit_max:g}] s.\n"
+        f"Workers: {n_workers} (across {len(args.aircraft)} aircraft).\n"
     )
+    logger.info("dispatching %d aircraft across %d workers",
+                len(args.aircraft), n_workers)
 
-    for aircraft in args.aircraft:
-        print(f"=== {aircraft} ===")
-        logger.info("aircraft=%s", aircraft)
-        base = SoaringConfig.from_yaml(CONFIGS_DIR / f"{aircraft}.yaml")
-        results: dict[str, dict] = {}
-
-        for mode in args.mode:
-            # Deterministic per-(aircraft, mode) RNG stream.
-            rng = np.random.default_rng(_seed_from(args.seed, aircraft, mode))
-
-            slot = f"{aircraft}_{mode}"
-            npz_path, manifest_path = slot_paths(
-                args.data_dir, SCRIPT_SLUG, slot
-            )
-            requested_manifest = build_manifest(
-                script=SCRIPT_SLUG,
-                params={
-                    "mode": mode,
-                    "n_sigma": args.n_sigma,
-                    "sigma_min": args.sigma_min,
-                    "sigma_max": args.sigma_max,
-                    "n_trajectories": args.n_trajectories,
-                    "total_time": args.total_time,
-                    "dt": args.dt,
-                    "fit_min": args.fit_min,
-                    "fit_max": args.fit_max,
-                    "seed": args.seed,
-                    "msd_estimator": "ea",
-                },
-                config_paths={"aircraft": CONFIGS_DIR / f"{aircraft}.yaml"},
-            )
-
-            decision = decide_action(
-                npz_path=npz_path,
-                manifest_path=manifest_path,
-                requested_manifest=requested_manifest,
-                mode=args.cache,
-                slot_label=f"{SCRIPT_SLUG}/{slot}",
-            )
-            if decision.diff:
-                print(f"  [{mode}] cache params differ:")
-                for line in decision.diff:
-                    print(f"    - {line}")
-            print(f"  [{mode}] cache decision: {decision.action}  ({decision.reason})")
-            logger.info("mode=%s decision=%s (%s) diff=%s",
-                        mode, decision.action, decision.reason, decision.diff)
-
-            if decision.action == "reuse":
-                arrays, _ = load_dataset(npz_path, manifest_path)
-                H_array = arrays["H_array"]
-                msd_matrix = arrays.get("msd_matrix")
-                sigma_grid_cached = arrays["sigma_grid"]
-                if not np.allclose(sigma_grid_cached, sigma_grid):
-                    sigma_grid = sigma_grid_cached
-            else:
-                H_array, msd_matrix = _compute_curve(
-                    base, mode, sigma_grid,
-                    n_trajectories=args.n_trajectories,
-                    total_time=args.total_time,
-                    dt=args.dt,
-                    fit_min=args.fit_min,
-                    fit_max=args.fit_max,
-                    rng=rng,
-                    logger=logger,
-                )
-                if args.cache != "off":
-                    save_dataset(
-                        npz_path=npz_path,
-                        manifest_path=manifest_path,
-                        manifest=requested_manifest,
-                        arrays={
-                            "sigma_grid": sigma_grid,
-                            "H_array": H_array,
-                            "msd_matrix": msd_matrix,
-                        },
-                    )
-                    print(f"  [{mode}] saved data: {npz_path}")
-                    logger.info("saved data: %s", npz_path)
-
-            sigma_star = _sigma_at_H(sigma_grid, H_array, H_EMPIRICAL)
-            if sigma_star is None:
-                print(
-                    f"  [{mode}] WARNING: H={H_EMPIRICAL} not reached in "
-                    f"σ_θ ∈ [{args.sigma_min}, {args.sigma_max}]."
-                )
-                logger.warning("mode=%s sigma_star not found", mode)
-            else:
-                print(f"  [{mode}] σ_θ* (H={H_EMPIRICAL}) = {sigma_star:.4f} rad")
-                logger.info("mode=%s sigma_star=%.4f", mode, sigma_star)
-
-            results[mode] = {
-                "sigma_grid": sigma_grid,
-                "H_array": H_array,
-                "msd_matrix": msd_matrix,
-                "sigma_star": sigma_star,
+    if n_workers == 1 or len(args.aircraft) == 1:
+        for aircraft in args.aircraft:
+            res = _process_aircraft(aircraft, args, sigma_grid)
+            logger.info("done aircraft=%s summary=%s",
+                        res["aircraft"], res["summary"])
+    else:
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            futures = {
+                pool.submit(_process_aircraft, aircraft, args, sigma_grid):
+                    aircraft
+                for aircraft in args.aircraft
             }
-
-        if results:
-            overlay_path = (
-                args.figures_dir / f"{SCRIPT_SLUG}_{aircraft}_overlay.pdf"
-            )
-            _plot_overlay(
-                aircraft=aircraft,
-                results=results,
-                fit_min=args.fit_min,
-                fit_max=args.fit_max,
-                output_path=overlay_path,
-            )
-            print(f"  overlay saved: {overlay_path}\n")
-            logger.info("saved overlay: %s", overlay_path)
-
-        if args.write:
-            by_mode = {
-                mode: (float(res["sigma_star"])
-                       if res["sigma_star"] is not None else None)
-                for mode, res in results.items()
-            }
-            # Canonical value: prefer full-cycle if available.
-            primary_mode = "full" if "full" in by_mode else next(iter(by_mode))
-            primary_value = by_mode.get(primary_mode)
-            if primary_value is None:
-                print(
-                    f"  WARNING: no sigma_star found for {aircraft}; "
-                    "calibration YAML not updated."
-                )
-            else:
-                payload = {
-                    "source_script": "estimate_sigma_theta",
-                    "value": primary_value,
-                    "mode": primary_mode,
-                    "by_mode": by_mode,
-                    "H_target": float(H_EMPIRICAL),
-                    "fit_window": [float(args.fit_min), float(args.fit_max)],
-                    "sigma_grid": [float(args.sigma_min), float(args.sigma_max),
-                                   int(args.n_sigma)],
-                    "n_trajectories": int(args.n_trajectories),
-                    "total_time": float(args.total_time),
-                    "dt": float(args.dt),
-                    "seed": int(args.seed),
-                }
-                out = write_calibration_section(
-                    aircraft, "sigma_theta", payload
-                )
-                print(
-                    f"  wrote {out}  (section: sigma_theta, "
-                    f"value={primary_value:.4f} rad, mode={primary_mode})"
-                )
-                logger.info("wrote sigma_theta to %s", out)
+            for fut in as_completed(futures):
+                aircraft = futures[fut]
+                try:
+                    res = fut.result()
+                except Exception:
+                    logger.exception("worker failed for aircraft=%s", aircraft)
+                    raise
+                logger.info("done aircraft=%s summary=%s",
+                            res["aircraft"], res["summary"])
+                print(f"[{aircraft}] worker finished.", flush=True)
 
     logger.info("end run")
 
