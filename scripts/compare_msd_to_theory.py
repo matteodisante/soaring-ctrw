@@ -402,7 +402,19 @@ def main() -> None:
                         help="Number of cycles per trajectory for the "
                              "cycle-counted MSD comparison.")
     parser.add_argument("--n-traj-cycles", type=int, default=3000,
-                        help="Trajectories for the cycle-counted MSD.")
+                        help="Trajectories for the cycle-counted MSD "
+                             "(default for all aircraft).")
+    parser.add_argument(
+        "--n-traj-cycles-by-aircraft", nargs="*", default=[],
+        metavar="AIRCRAFT=N",
+        help=(
+            "Per-aircraft override of --n-traj-cycles, e.g. "
+            "`--n-traj-cycles-by-aircraft sailplanes=60000`. Useful "
+            "for sailplanes (mu_T=2.62 close to 2), whose Lomax "
+            "variance converges slowly and benefits from a much larger "
+            "sample. Aircraft not listed use --n-traj-cycles."
+        ),
+    )
     parser.add_argument("--seed-cycles", type=int, default=42,
                         help="RNG seed for the cycle-counted MSD.")
     parser.add_argument(
@@ -466,9 +478,23 @@ def main() -> None:
     # Cycle-counted MSD — direct test of Eq. 23 without time→cycle
     # conversion. Runs a fresh small simulation per aircraft. The same
     # data feeds the H_eff(N) plot below.
+    n_traj_map: dict[str, int] = {ac: args.n_traj_cycles for ac in args.aircraft}
+    for spec in args.n_traj_cycles_by_aircraft:
+        if "=" not in spec:
+            parser.error(
+                f"--n-traj-cycles-by-aircraft expects AIRCRAFT=N, got {spec!r}"
+            )
+        key, val = spec.split("=", 1)
+        if key not in AIRCRAFT_ORDER:
+            parser.error(
+                f"Unknown aircraft {key!r} in --n-traj-cycles-by-aircraft; "
+                f"choose from {list(AIRCRAFT_ORDER)}."
+            )
+        n_traj_map[key] = int(val)
     print(
-        f"\nCycle-counted MSD ({args.n_traj_cycles} trajectories × "
-        f"{args.n_cycles} cycles per aircraft)..."
+        "\nCycle-counted MSD ("
+        + ", ".join(f"{ac}: {n_traj_map[ac]} traj" for ac in args.aircraft)
+        + f" × {args.n_cycles} cycles)..."
     )
     cycle_msd: dict[str, np.ndarray] = {}
     for i, ac in enumerate(args.aircraft):
@@ -477,7 +503,7 @@ def main() -> None:
         rng = np.random.default_rng(args.seed_cycles + i)
         cycle_msd[ac] = simulate_cycle_msd(
             configs[ac], n_cycles=args.n_cycles,
-            n_traj=args.n_traj_cycles, rng=rng,
+            n_traj=n_traj_map[ac], rng=rng,
         )
         print(f"  {ac}: done")
     plot_cycles(configs, cycle_msd,
