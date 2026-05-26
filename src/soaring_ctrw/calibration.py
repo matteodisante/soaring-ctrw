@@ -61,8 +61,8 @@ from typing import Any
 import numpy as np
 import yaml
 
-from model import AngularConfig, SoaringConfig
-from paths import CONFIGS_DIR, OUTPUTS_DIR
+from .model import AngularConfig, SoaringConfig
+from .paths import CONFIGS_DIR, OUTPUTS_DIR
 
 __all__ = [
     "CALIBRATION_DIR",

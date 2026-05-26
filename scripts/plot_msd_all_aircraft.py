@@ -35,7 +35,6 @@ repo (see ``cache.py``).
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from pathlib import Path
 
@@ -44,12 +43,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-SRC_DIR = ROOT_DIR / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
 
-from cache import (
+from soaring_ctrw.cache import (
     add_cache_args,
     build_manifest,
     decide_action,
@@ -58,11 +53,11 @@ from cache import (
     save_dataset,
     slot_paths,
 )
-from calibration import calibration_path, load_calibrated_config
-from model import SoaringConfig
-from observables import msd_ensemble
-from paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR
-from simulation import simulate_ensemble
+from soaring_ctrw.calibration import calibration_path, load_calibrated_config
+from soaring_ctrw.model import SoaringConfig
+from soaring_ctrw.observables import msd_ensemble
+from soaring_ctrw.paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR
+from soaring_ctrw.simulation import simulate_ensemble
 
 SCRIPT_SLUG = "msd_all_aircraft"
 AIRCRAFT_ORDER = ("paragliders", "hang_gliders", "sailplanes")

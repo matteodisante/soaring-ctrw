@@ -13,8 +13,8 @@ import numpy as np
 import pytest
 import yaml
 
-import calibration as cal_mod
-from calibration import (
+import soaring_ctrw.calibration as cal_mod
+from soaring_ctrw.calibration import (
     apply_calibration,
     calibrated_sigma_theta,
     calibration_path,
@@ -23,7 +23,7 @@ from calibration import (
     write_calibration_section,
     _normalize,
 )
-from model import (
+from soaring_ctrw.model import (
     AngularConfig,
     ClimbMotionConfig,
     PhaseConfig,

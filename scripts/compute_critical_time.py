@@ -33,18 +33,13 @@ Outputs:
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 import yaml
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-SRC_DIR = ROOT_DIR / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
 
-from paths import CONFIGS_DIR  # noqa: E402
-from calibration import (  # noqa: E402
+from soaring_ctrw.paths import CONFIGS_DIR  # noqa: E402
+from soaring_ctrw.calibration import (  # noqa: E402
     calibrated_sigma_theta,
     calibration_path,
     read_calibration,

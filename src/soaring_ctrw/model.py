@@ -31,7 +31,7 @@ from typing import Any
 
 import yaml
 
-from distributions import (
+from .distributions import (
     Exponential,
     LomaxTail,
     MittagLeffler,

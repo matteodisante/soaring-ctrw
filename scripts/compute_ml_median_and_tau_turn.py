@@ -25,7 +25,6 @@ Requires ``pymittagleffler``.
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -33,13 +32,9 @@ import yaml
 from pymittagleffler import mittag_leffler
 from scipy.optimize import root_scalar
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-SRC_DIR = ROOT_DIR / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
 
-from paths import CONFIGS_DIR  # noqa: E402
-from calibration import write_calibration_section  # noqa: E402
+from soaring_ctrw.paths import CONFIGS_DIR  # noqa: E402
+from soaring_ctrw.calibration import write_calibration_section  # noqa: E402
 
 DEFAULT_AIRCRAFT = ("paragliders", "hang_gliders", "sailplanes")
 

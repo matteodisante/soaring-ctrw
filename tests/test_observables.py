@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from observables import (
+from soaring_ctrw.observables import (
     fit_hurst,
     msd_ensemble,
 )

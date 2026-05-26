@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 import time
 from pathlib import Path
 
@@ -47,14 +46,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-SRC_DIR = ROOT_DIR / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
 
 import hashlib
 
-from cache import (
+from soaring_ctrw.cache import (
     add_cache_args,
     build_manifest,
     decide_action,
@@ -68,11 +63,11 @@ def _seed_from(*parts) -> int:
     """Deterministic 32-bit-safe int seed from arbitrary labels."""
     h = hashlib.sha256(repr(parts).encode()).digest()
     return int.from_bytes(h[:4], "big")
-from model import AngularConfig, SoaringConfig
-from observables import fit_hurst, msd_ensemble
-from paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR
-from calibration import write_calibration_section
-from simulation import simulate_ensemble
+from soaring_ctrw.model import AngularConfig, SoaringConfig
+from soaring_ctrw.observables import fit_hurst, msd_ensemble
+from soaring_ctrw.paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR, REPO_ROOT
+from soaring_ctrw.calibration import write_calibration_section
+from soaring_ctrw.simulation import simulate_ensemble
 
 SCRIPT_SLUG = "estimate_sigma_theta"
 H_EMPIRICAL = 0.88
@@ -344,7 +339,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--figures-dir", type=Path, default=FIGURES_DIR)
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
-    parser.add_argument("--logs-dir", type=Path, default=ROOT_DIR / "logs")
+    parser.add_argument("--logs-dir", type=Path, default=REPO_ROOT / "logs")
     parser.add_argument(
         "--write",
         action="store_true",

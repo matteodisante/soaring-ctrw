@@ -16,7 +16,7 @@ from pathlib import Path
 
 __all__ = ["REPO_ROOT", "OUTPUTS_DIR", "FIGURES_DIR", "DATA_DIR", "CONFIGS_DIR"]
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 OUTPUTS_DIR = REPO_ROOT / "outputs"
 FIGURES_DIR = OUTPUTS_DIR / "figures"
 DATA_DIR = OUTPUTS_DIR / "data"

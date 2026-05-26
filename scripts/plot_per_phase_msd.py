@@ -25,7 +25,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
-import sys
 import time
 from pathlib import Path
 
@@ -34,12 +33,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-SRC_DIR = ROOT_DIR / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
 
-from cache import (
+from soaring_ctrw.cache import (
     add_cache_args,
     build_manifest,
     decide_action,
@@ -47,9 +42,9 @@ from cache import (
     save_dataset,
     slot_paths,
 )
-from model import SoaringConfig
-from paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR
-from simulation import (
+from soaring_ctrw.model import SoaringConfig
+from soaring_ctrw.paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR, REPO_ROOT
+from soaring_ctrw.simulation import (
     CycleTrajectory,
     _climb_position,
     _search_position,
@@ -405,7 +400,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--figures-dir", type=Path, default=FIGURES_DIR)
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
-    parser.add_argument("--logs-dir", type=Path, default=ROOT_DIR / "logs")
+    parser.add_argument("--logs-dir", type=Path, default=REPO_ROOT / "logs")
     add_cache_args(parser)
     args = parser.parse_args()
 

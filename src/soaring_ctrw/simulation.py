@@ -57,8 +57,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from distributions import MittagLeffler
-from model import SoaringConfig
+from .distributions import MittagLeffler
+from .model import SoaringConfig
 
 __all__ = [
     "CycleTrajectory",

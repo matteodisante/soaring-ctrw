@@ -8,14 +8,14 @@ import numpy as np
 import pytest
 import yaml
 
-from model import (
+from soaring_ctrw.model import (
     AngularConfig,
     ClimbMotionConfig,
     PhaseConfig,
     SearchMotionConfig,
     SoaringConfig,
 )
-from simulation import simulate_ensemble, simulate_single
+from soaring_ctrw.simulation import simulate_ensemble, simulate_single
 
 
 def _full_config(theta0: float | None = None) -> SoaringConfig:

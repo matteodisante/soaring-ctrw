@@ -27,18 +27,13 @@ auto mode) when the manifest matches the requested parameters.
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-SRC_DIR = ROOT_DIR / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
 
-from cache import (
+from soaring_ctrw.cache import (
     add_cache_args,
     build_manifest,
     decide_action,
@@ -46,9 +41,9 @@ from cache import (
     save_dataset,
     slot_paths,
 )
-from model import SoaringConfig
-from paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR
-from simulation import interpolate_trajectory, simulate_single
+from soaring_ctrw.model import SoaringConfig
+from soaring_ctrw.paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR
+from soaring_ctrw.simulation import interpolate_trajectory, simulate_single
 
 SCRIPT_SLUG = "trajectory_panel"
 N_PANELS = 1

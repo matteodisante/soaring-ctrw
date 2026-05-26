@@ -30,7 +30,6 @@ Inputs:
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 import matplotlib
@@ -39,15 +38,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.special import gamma as gamma_fn
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-SRC_DIR = ROOT_DIR / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
 
-from calibration import load_calibrated_config
-from model import SoaringConfig
-from paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR
-from simulation import simulate_single
+from soaring_ctrw.calibration import load_calibrated_config
+from soaring_ctrw.model import SoaringConfig
+from soaring_ctrw.paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR
+from soaring_ctrw.simulation import simulate_single
 
 AIRCRAFT_ORDER = ("paragliders", "hang_gliders", "sailplanes")
 AIRCRAFT_LABELS = {
