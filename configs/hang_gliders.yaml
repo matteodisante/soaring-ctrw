@@ -47,6 +47,6 @@ search_motion:
 
 climb_motion:
   r0: 58.1
-  T_turn_mean: 40.0
+  T_turn_mean: 30.0
   T_turn_std: 10.0
   v_drift: 3.59
