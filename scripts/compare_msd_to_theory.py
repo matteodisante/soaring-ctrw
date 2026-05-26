@@ -39,7 +39,7 @@ import numpy as np
 from scipy.special import gamma as gamma_fn
 
 
-from soaring_ctrw.calibration import load_calibrated_config
+from soaring_ctrw.calibration import load_calibrated_config, write_calibration_section
 from soaring_ctrw.model import SoaringConfig
 from soaring_ctrw.paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR
 from soaring_ctrw.simulation import simulate_single
@@ -405,6 +405,15 @@ def main() -> None:
                         help="Trajectories for the cycle-counted MSD.")
     parser.add_argument("--seed-cycles", type=int, default=42,
                         help="RNG seed for the cycle-counted MSD.")
+    parser.add_argument(
+        "--write", action="store_true",
+        help=(
+            "Also persist the climb-circling pulsation omega_0 and its "
+            "jitter sigma_omega (computed from T_turn_mean / T_turn_std "
+            "of the YAML config) into the `climb_circling` section of "
+            "outputs/data/calibration/<aircraft>.yaml."
+        ),
+    )
     args = parser.parse_args()
     args.figures_dir.mkdir(parents=True, exist_ok=True)
 
@@ -416,11 +425,36 @@ def main() -> None:
         per_phase[ac] = _load_per_phase_msd(ac, args.data_dir)
         cfg = configs[ac]
         A, B, rho, mean_T = compute_AB(cfg)
+        cm = cfg.climb_motion
+        omega_0 = 2.0 * np.pi / cm.T_turn_mean
+        sigma_omega = omega_0 * cm.T_turn_std / cm.T_turn_mean
         print(
             f"  {ac}: sigma_theta={cfg.angular.sigma_theta:.4f}  "
             f"<T>={mean_T:.1f} s  A={A:.3g}  B={B:.3g}  "
             f"rho={rho:.4f}  n_c={2/cfg.angular.sigma_theta**2:.2f}"
         )
+        print(
+            f"  {ac}: T_turn_mean={cm.T_turn_mean:.3f} s  "
+            f"T_turn_std={cm.T_turn_std:.3f} s  "
+            f"omega_0=2*pi/T_turn_mean={omega_0:.6f} rad/s  "
+            f"sigma_omega=omega_0*T_turn_std/T_turn_mean={sigma_omega:.6f} rad/s"
+        )
+        if args.write:
+            payload = {
+                "source_script": "compare_msd_to_theory",
+                "T_turn_mean": float(cm.T_turn_mean),
+                "T_turn_std": float(cm.T_turn_std),
+                "omega_0": float(omega_0),
+                "sigma_omega": float(sigma_omega),
+                "formula_omega_0": "2*pi / T_turn_mean",
+                "formula_sigma_omega":
+                    "omega_0 * T_turn_std / T_turn_mean",
+            }
+            out = write_calibration_section(ac, "climb_circling", payload)
+            print(
+                f"  {ac}: wrote {out}  (section: climb_circling, "
+                f"omega_0={omega_0:.6f} rad/s)"
+            )
 
     plot_search(configs, per_phase,
                 args.figures_dir / "compare_theory_msd_search.pdf",
