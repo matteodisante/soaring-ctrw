@@ -27,7 +27,8 @@ import numpy as np
 
 
 from soaring_ctrw.distributions import Exponential, LomaxTail  # noqa: E402
-from soaring_ctrw.paths import FIGURES_DIR  # noqa: E402
+from soaring_ctrw.model import SoaringConfig  # noqa: E402
+from soaring_ctrw.paths import CONFIGS_DIR, FIGURES_DIR  # noqa: E402
 
 _COLORS: dict[str, str] = {
     "paragliders":  "tab:orange",
@@ -189,6 +190,10 @@ def main() -> None:
         "--n-bins", type=int, default=40,
         help="Number of log-spaced histogram bins (PDF panels).",
     )
+    parser.add_argument(
+        "--configs-dir", type=Path, default=CONFIGS_DIR,
+        help="Directory containing <aircraft>.yaml config files.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -196,23 +201,39 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(args.seed)
 
-    # Table 1 parameters: (tau_0, mu) for Lomax; tau_mean for Exponential.
+    # --- Load Lomax (transition, search) and Exponential (climb) parameters
+    # from the per-aircraft YAML configs (configs/<aircraft>.yaml). ---
+    aircraft_keys = list(_NAMES.keys())
+    configs: dict[str, SoaringConfig] = {
+        k: SoaringConfig.from_yaml(args.configs_dir / f"{k}.yaml")
+        for k in aircraft_keys
+    }
+
+    def _phase_params(phase: str, expected_dist: str) -> dict[str, dict[str, float]]:
+        out: dict[str, dict[str, float]] = {}
+        for k, cfg in configs.items():
+            phase_cfg = getattr(cfg, phase)
+            if phase_cfg.distribution.lower() != expected_dist:
+                raise ValueError(
+                    f"{k}.yaml: phase {phase!r} has distribution "
+                    f"{phase_cfg.distribution!r}, expected {expected_dist!r}."
+                )
+            out[k] = dict(phase_cfg.params)
+        return out
+
     lomax_params: dict[str, dict[str, tuple[float, float]]] = {
         "transition": {
-            "paragliders":  (700.0, 3.93),
-            "sailplanes":   (500.0, 2.62),
-            "hang_gliders": (600.0, 4.79),
+            k: (float(p["tau_0"]), float(p["mu"]))
+            for k, p in _phase_params("transition", "lomax").items()
         },
         "search": {
-            "paragliders":  (200.0, 3.88),
-            "sailplanes":   (75.0,  2.9),
-            "hang_gliders": (150.0, 2.25),
+            k: (float(p["tau_0"]), float(p["mu"]))
+            for k, p in _phase_params("search", "lomax").items()
         },
     }
     climb_params: dict[str, float] = {
-        "paragliders":  110.0,
-        "sailplanes":   110.0,
-        "hang_gliders": 110.0,
+        k: float(p["tau_mean"])
+        for k, p in _phase_params("climb", "exponential").items()
     }
 
     # --- Draw all samples up-front (shared between CCDF and PDF panels) ---
