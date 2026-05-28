@@ -1,0 +1,4 @@
+# Sphinx build output and machine-generated doc inputs (dep graphs,
+# per-script pages, autosummary stubs). All rebuilt from source each build.
+_build/
+_generated/

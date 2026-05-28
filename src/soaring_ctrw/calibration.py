@@ -1,53 +1,52 @@
 """Per-aircraft calibration files.
 
 Some model parameters are not fixed by the YAML configuration but
-inferred from empirical observables. The most important is the
+derived from empirical observables. The most important is the
 cycle-to-cycle heading dispersion ``sigma_theta``, calibrated by
-``scripts/estimate_sigma_theta.py`` against the empirical
-``H_eff = 0.88``. Less centrally, the search-phase scales
-(``tau_turn_calibrated``, ``u_S_fitted``) produced by
-``scripts/calibrate_search.py`` and the Mittag-Leffler median
-produced by ``scripts/compute_ml_median_and_tau_turn.py`` also live
-here.
+:mod:`scripts.estimate_sigma_theta` against the empirical
+``H_eff = 0.88``. Each aircraft keeps a single YAML file under
+``outputs/data/calibration/<aircraft>.yaml`` collecting every derived
+quantity, with one top-level section per producing script:
 
-Each aircraft has one YAML file under
-``outputs/data/calibration/<aircraft>.yaml`` with one section per
-calibration script::
+==================  ==================================  ====================================
+Section             Written by                          Holds
+==================  ==================================  ====================================
+``sigma_theta``     ``scripts/estimate_sigma_theta``    calibrated ``sigma_theta`` (+ by_mode)
+``mittag_leffler``  ``scripts/compute_ml_median_...``   ``m_{1/2}(alpha)`` and ``tau_turn``
+``critical_time``   ``scripts/compute_critical_time``   crossover ``t_c`` and ``n_c``
+``climb_circling``  ``scripts/compare_msd_to_theory``   climb ``omega_0`` / ``sigma_omega``
+==================  ==================================  ====================================
+
+A typical file looks like::
 
     aircraft: paragliders
     sigma_theta:
       source_script: estimate_sigma_theta
-      value: 0.346
+      value: 0.3899
       mode: full
       by_mode:
-        bare: 0.302
-        full: 0.346
+        bare: 0.4187
+        full: 0.3899
       H_target: 0.88
-      fit_window: [10.0, 6000.0]
+      fit_window: [10.0, 7000.0]
       n_trajectories: 1000
       total_time: 15000.0
-    search:
-      source_script: calibrate_search
-      m_half_alpha: 0.6789
-      tau_turn_calibrated: 9.6427
-      u_S: 35.0
-      u_S_fitted: 39.0555
-      ...
     mittag_leffler:
       source_script: compute_ml_median_and_tau_turn
-      alpha_S: 0.7
-      m_half_alpha: 0.6789
-      tau_turn_calibrated: 9.6427
+      alpha_S: 0.6
+      m_half_alpha: 0.6057
+      tau_turn_calibrated: 9.6053
 
-Sections are independent: re-running one calibration script merges
-its section into the file without touching the others. The downstream
-simulation scripts read ``sigma_theta`` (and only ``sigma_theta``) via
-:func:`apply_calibration`, which substitutes it into the
-:class:`AngularConfig` of a loaded :class:`SoaringConfig`.
+Sections are independent: re-running one calibration script merges its
+section into the file via :func:`write_calibration_section` without
+touching the others. Downstream simulation scripts read ``sigma_theta``
+(and only ``sigma_theta``) via :func:`apply_calibration`, which
+substitutes it into the :class:`~soaring_ctrw.model.AngularConfig` of a
+loaded :class:`~soaring_ctrw.model.SoaringConfig`.
 
-The ``sigma_theta`` value in the input ``configs/<aircraft>.yaml`` is
-treated as a placeholder and ignored: simulation scripts that need
-``sigma_theta`` must read it from the calibration file via this
+The ``sigma_theta`` value in the input ``configs/<aircraft>.yaml`` is a
+placeholder (``null``) and is ignored: simulation scripts that need
+``sigma_theta`` must read it from the calibration file through this
 module.
 """
 

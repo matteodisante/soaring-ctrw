@@ -61,6 +61,12 @@ class PhaseConfig:
     params: dict[str, float] = field(default_factory=dict)
 
     def build(self) -> WaitingTimeSampler:
+        """Instantiate the configured duration sampler.
+
+        Dispatches on :attr:`distribution` and forwards :attr:`params`
+        to the matching sampler in :mod:`~soaring_ctrw.distributions`.
+        Raises ``ValueError`` for an unknown distribution name.
+        """
         dist = self.distribution.lower()
         if dist == "lomax":
             return LomaxTail(**self.params)

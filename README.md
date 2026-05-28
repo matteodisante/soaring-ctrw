@@ -7,6 +7,12 @@ thermal soaring flights"* (Di Sante, 2026), which extends the empirical
 analysis of Vilpellet, Darmon & Benzaquen
 ([arXiv:2601.01293](https://arxiv.org/abs/2601.01293), VDB hereafter).
 
+[![docs](https://github.com/matteodisante/soaring-ctrw/actions/workflows/docs.yml/badge.svg)](https://github.com/matteodisante/soaring-ctrw/actions/workflows/docs.yml)
+
+**Documentation:** <https://matteodisante.github.io/soaring-ctrw/> — full API
+reference, a page per script, and dependency graphs, all generated from the
+source. This README is a quickstart; see the site for everything else.
+
 ## Model in one screen
 
 A flight is a renewal sequence of soaring **cycles**. Each cycle has
@@ -72,6 +78,7 @@ soaring-ctrw/
 │   ├── plot_trajectory.py                 # 2×2 sample-trajectory figure (uniform square axes)
 │   └── plot_phase_durations.py            # analytic CCDF panels (transition / search / climb)
 ├── tests/                       # pytest suite
+├── docs/                        # Sphinx documentation (auto-generated from source)
 ├── outputs/                     # all script outputs land here
 │   ├── figures/
 │   └── data/
@@ -103,7 +110,39 @@ package fails to import. The compat mode falls back to the legacy
 `easy-install.pth` scheme that Python 3.14 still loads. Requires
 `setuptools >= 64`.
 
+## Documentation
+
+The full documentation lives at
+**<https://matteodisante.github.io/soaring-ctrw/>**. It is built with Sphinx
+from the docstrings, the scripts, and the actual imports — so it stays in sync
+with the code by construction — and contains:
+
+- the complete **API reference** (every module/class/function from its docstring);
+- **one page per script** (purpose, import map, and the live `--help`);
+- auto-derived **dependency graphs** ([architecture](https://matteodisante.github.io/soaring-ctrw/architecture.html));
+- the **reproduction pipeline** ([pipeline](https://matteodisante.github.io/soaring-ctrw/pipeline.html)).
+
+A GitHub Actions workflow (`.github/workflows/docs.yml`) rebuilds the site on
+every push to `main` and publishes it to GitHub Pages. The same workflow gates
+every push/PR with a warnings-as-errors build and a docstring-coverage check,
+so documentation that references removed or renamed code fails CI. See
+[`docs/contributing-docs.md`](docs/contributing-docs.md) for the maintenance
+contract.
+
+To build it locally:
+
+```bash
+pip install -e ".[docs]" --config-settings editable_mode=compat
+# graphviz is needed for the dependency graphs:
+#   macOS: brew install graphviz   •   Debian/Ubuntu: sudo apt-get install graphviz
+sphinx-build -b html docs docs/_build/html   # open docs/_build/html/index.html
+```
+
 ## Reproducing the figures
+
+For per-script details (every option, the import map, the live `--help`) see
+the [scripts reference](https://matteodisante.github.io/soaring-ctrw/scripts.html)
+and the [pipeline page](https://matteodisante.github.io/soaring-ctrw/pipeline.html).
 
 ### Recommended run order
 
@@ -152,93 +191,12 @@ every figure of the manuscript is:
    python scripts/plot_phase_durations.py
    ```
 
-The `configs/<aircraft>.yaml` files keep `angular.sigma_theta: null`;
-any script that needs `σ_θ` reads it from
-`outputs/data/calibration/<aircraft>.yaml` via
-`src/calibration.py::apply_calibration` (no manual promotion step is
-required). All per-aircraft derived quantities (`σ_θ⋆`,
-`tau_turn_calibrated`, `m_{1/2}(α)`, `t_c`, …) live in that single
-YAML; sections are merged in place by `write_calibration_section`, so
-successive runs of different calibrators never overwrite each other.
-
-### Individual commands
-
-Calibrate the cycle-to-cycle heading dispersion σ_θ (1-D scan against
-the empirical H_eff = 0.88):
-
-```bash
-python scripts/estimate_sigma_theta.py \
-    --n-sigma 16 --n-trajectories 1000 --total-time 15000 \
-    --fit-min 10 --fit-max 7000
-```
-
-This populates ``outputs/figures/estimate_sigma_theta_*_overlay.pdf``
-(one overlay per aircraft with the bare- and full-cycle
-``H_eff(σ_θ)`` curves) and caches the scan in
-``outputs/data/estimate_sigma_theta/*.npz``. Add ``--cache reuse`` to
-reuse a cached scan instead of re-running the Monte Carlo. Without
-``--write`` only the figures + cache are produced; ``σ_θ⋆`` is
-printed to stdout/log but not persisted.
-
-Quick stand-alone table of `m_{1/2}(α)` and the calibrated
-`τ_turn^S = (π/2) / (Ω_S · m_{1/2}(α_S))`:
-
-```bash
-python scripts/compute_ml_median_and_tau_turn.py
-```
-
-Pre-asymptotic crossover time `t_c = 2⟨T⟩/σ_θ²` (requires step 3
-to have been run with `--write`):
-
-```bash
-python scripts/compute_critical_time.py --write
-```
-
-This also prints the per-phase mean durations
-`⟨τ_T⟩, ⟨τ_S⟩, ⟨τ_C⟩`, the mean cycle duration `⟨T⟩`, and the
-number-of-cycles crossover `n_c = 2/σ_θ²`, all of which are stored
-in the `critical_time` section of the calibration YAML.
-
-The per-phase MSD figures (3-panel, one column per aircraft) are
-reproduced with
-
-```bash
-python scripts/plot_per_phase_msd.py
-```
-
-The combined MSD comparison across aircraft (overlay + local-slope
-sub-panel + rescaled-by-v_xy² figure with power-law fits over
-``[10, 7000]`` s) is reproduced with
-
-```bash
-python scripts/plot_msd_all_aircraft.py
-```
-
-The four side-by-side comparisons between simulated MSDs and the
-closed-form expressions of the manuscript (Eq. 10 for the search
-MSD, Eq. 11 for the climb MSD, Eq. 23 for the cycle-counted MSD,
-and Eq. 26 for the local Hurst exponent `H_eff(N)`) are produced by
-
-```bash
-python scripts/compare_msd_to_theory.py
-```
-
-It reads the per-phase MSD cache (step 2) and the calibrated
-`σ_θ` (step 3) and runs a small live cycle-counted simulation for
-the last two panels.
-
-The sample-trajectory figure (2×2 panel with all four sub-plots
-rendered as identical squares) is reproduced with
-
-```bash
-python scripts/plot_trajectory.py
-```
-
-The analytic phase-duration CCDFs of Fig. 2 of the manuscript come from
-
-```bash
-python scripts/plot_phase_durations.py
-```
+The `configs/<aircraft>.yaml` files keep `angular.sigma_theta: null`; any
+script that needs `σ_θ` reads it from `outputs/data/calibration/<aircraft>.yaml`
+via `apply_calibration`, and all derived per-aircraft quantities live in that
+single YAML (sections merged in place, so calibrators never overwrite each
+other). Full details are in the
+[`calibration` API docs](https://matteodisante.github.io/soaring-ctrw/_generated/api/soaring_ctrw.calibration.html).
 
 ## Tests
 

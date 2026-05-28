@@ -14,7 +14,7 @@ annotated. A zoom inset on the search + climb portion is added in the
 bottom-right corner.
 
 Outputs (under ``outputs/``)
----------------------------
+----------------------------
 - ``figures/example_trajectories.pdf``  -- the combined 1×N figure
 - ``data/trajectory_panel/<aircraft>.npz``  -- the trajectory per aircraft
 - ``data/trajectory_panel/<aircraft>.json`` -- the run manifest

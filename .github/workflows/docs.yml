@@ -1,0 +1,66 @@
+name: docs
+
+# Builds the Sphinx docs and publishes them to GitHub Pages.
+#
+# The `build` job is also the freshness gate (runs on every push and PR):
+#   1. sphinx-build -W : a doc referencing a removed/renamed object, a dead
+#      toctree entry, or a malformed docstring fails the build.
+#   2. interrogate     : public-API docstring coverage below threshold fails.
+# The `deploy` job publishes to Pages only from `main`.
+# See docs/contributing-docs.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Allow only one concurrent deployment; do not cancel an in-progress one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Graphviz (for the dependency graphs)
+        run: sudo apt-get update && sudo apt-get install -y graphviz
+
+      - name: Install the package and docs toolchain
+        run: pip install -e ".[docs]" --config-settings editable_mode=compat
+
+      - name: Docstring-coverage gate
+        run: interrogate -c pyproject.toml src
+
+      - name: Build the docs (warnings are errors)
+        run: sphinx-build -b html -W --keep-going docs docs/_build/html
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_build/html
+
+  deploy:
+    # Publish only from main; pull requests still run the build gate above.
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

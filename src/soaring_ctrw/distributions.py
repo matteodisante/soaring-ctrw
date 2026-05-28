@@ -11,8 +11,10 @@ with arbitrary lower cutoff) can be added when needed.
 
 Notation
 --------
-Throughout, we follow the convention of Vilpellet et al.:
+Throughout, we follow the convention of Vilpellet et al.::
+
     P(T > τ) ~ 1/τ^μ
+
 for the Pareto tail, so that μ is the *tail exponent* (not the shape in
 some other conventions). In scipy.stats.pareto, this corresponds to
 ``b = μ`` and ``scale = τ_min``.
@@ -45,6 +47,10 @@ class WaitingTimeSampler:
     variance: float
 
     def sample(self, size: int, rng: np.random.Generator) -> np.ndarray:  # pragma: no cover
+        """Draw ``size`` i.i.d. non-negative samples using ``rng``.
+
+        Abstract: concrete subclasses must override this.
+        """
         raise NotImplementedError
 
 
@@ -172,6 +178,7 @@ class Exponential(WaitingTimeSampler):
         return self.tau_mean**2
 
     def sample(self, size: int, rng: np.random.Generator) -> np.ndarray:
+        """Draw ``size`` i.i.d. samples."""
         return rng.exponential(scale=self.tau_mean, size=size)
 
 

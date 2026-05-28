@@ -186,6 +186,14 @@ def slot_paths(data_dir: Path, script_slug: str, slot: str) -> tuple[Path, Path]
 
 @dataclass
 class CacheDecision:
+    """Outcome of comparing a requested run against a cached manifest.
+
+    ``action`` is ``"reuse"`` when the cached dataset is valid for the
+    requested parameters, ``"regenerate"`` otherwise. ``reason`` is a
+    short human-readable explanation and ``diff`` lists the parameter
+    differences that forced a regeneration (empty on a full match).
+    """
+
     action: Literal["reuse", "regenerate"]
     reason: str
     diff: list[str]  # human-readable param differences (empty on full match)

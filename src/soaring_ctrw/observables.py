@@ -1,7 +1,7 @@
 """Transport observables: ensemble-averaged MSD and Hurst-exponent fits.
 
 The MSD estimator used throughout this codebase is the **pure
-ensemble-averaged** (EA) MSD:
+ensemble-averaged** (EA) MSD::
 
     ⟨δ²(Δ)⟩_EA = ⟨ |r_m(Δ) − r_m(0)|² ⟩_m,
 

@@ -43,6 +43,13 @@ dev = [
     "ruff>=0.1",
     "mypy>=1.5",
 ]
+docs = [
+    "sphinx>=7.2",
+    "furo>=2024.1",
+    "myst-parser>=2.0",
+    "sphinxcontrib-programoutput>=0.17",
+    "interrogate>=1.7",
+]
 
 [project.urls]
 Homepage = "https://github.com/matteodisante/soaring-ctrw"
@@ -67,3 +74,18 @@ python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
+
+# Docstring-coverage gate. The docs CI fails if public API docstrings
+# fall below ``fail-under``; this is half of the "docs can never go stale"
+# guarantee (the other half is the warnings-as-errors Sphinx build).
+[tool.interrogate]
+fail-under = 100
+ignore-init-method = true
+ignore-magic = true
+ignore-nested-functions = true
+ignore-private = true            # __double_underscore
+ignore-semiprivate = true        # _single_underscore internal helpers
+ignore-property-decorators = true  # accessors documented in class docstrings
+ignore-module = false
+exclude = ["docs", "tests", "build", ".venv"]
+verbose = 1
