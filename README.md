@@ -17,7 +17,7 @@ source. This README is a quickstart; see the site for everything else.
 
 A flight is a renewal sequence of soaring **cycles**. Each cycle has
 three phases — *transition* T, *search* S, *climb* C — with i.i.d.
-phase-duration scheduler
+phase-duration scheduler.
 
 - Transition and search: Lomax,
   ``P(τ > τ) = (1 + τ / τ_0)^{-μ}``.
