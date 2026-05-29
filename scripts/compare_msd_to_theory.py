@@ -146,8 +146,8 @@ def compute_Sigma_C(cfg: SoaringConfig) -> float:
     mu_C = cfg.climb.params["tau_mean"]
     omega_bar = 2.0 * np.pi / cm.T_turn_mean
     sigma_omega = omega_bar * cm.T_turn_std / cm.T_turn_mean
-    A = 1.0 + omega_bar * mu_C
-    B = 0.5 * sigma_omega ** 2 * mu_C ** 2
+    A = 0.5 * sigma_omega ** 2 * mu_C ** 2
+    B = 1.0 + omega_bar * mu_C
     Re_phi = A / (A ** 2 + B ** 2)
     return 2.0 * cm.r0 ** 2 * (1.0 - Re_phi) + 2.0 * cm.v_drift ** 2 * mu_C ** 2
 
