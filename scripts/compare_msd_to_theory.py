@@ -36,7 +36,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.special import gamma as gamma_fn
+from scipy.special import erfcx, gamma as gamma_fn
 
 
 from soaring_ctrw.calibration import load_calibrated_config, write_calibration_section
@@ -139,16 +139,26 @@ def compute_Sigma_S(cfg: SoaringConfig) -> float:
 
 
 def compute_Sigma_C(cfg: SoaringConfig) -> float:
-    """Per-cycle climb displacement variance, Eq. 37."""
+    """Per-cycle climb displacement variance, Eq. 37 (exact form).
+
+    Computes ``Re<exp(i omega tau)>`` exactly with omega = omega_bar +
+    delta_omega, delta_omega ~ N(0, sigma_omega^2) and tau ~ Exp(mu_C)
+    independent, via the scaled complementary error function for
+    complex arguments (Faddeeva). The drift term uses the exact
+    exponential second moment <tau^2> = 2 mu_C^2.
+    """
     cm = cfg.climb_motion
     if cm is None:
         return 0.0
     mu_C = cfg.climb.params["tau_mean"]
     omega_bar = 2.0 * np.pi / cm.T_turn_mean
     sigma_omega = omega_bar * cm.T_turn_std / cm.T_turn_mean
-    A = 0.5 * sigma_omega ** 2 * mu_C ** 2
-    B = 1.0 + omega_bar * mu_C
-    Re_phi = A / (A ** 2 + B ** 2)
+    if sigma_omega == 0.0:
+        Re_phi = 1.0 / (1.0 + (omega_bar * mu_C) ** 2)
+    else:
+        z = (1.0 / mu_C - 1j * omega_bar) / (sigma_omega * np.sqrt(2.0))
+        I = np.sqrt(np.pi / 2.0) / (mu_C * sigma_omega) * erfcx(z)
+        Re_phi = float(np.real(I))
     return 2.0 * cm.r0 ** 2 * (1.0 - Re_phi) + 2.0 * cm.v_drift ** 2 * mu_C ** 2
 
 
