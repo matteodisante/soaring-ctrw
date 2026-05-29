@@ -2,8 +2,8 @@
 
 A cycle-based continuous-time random walk (CTRW) model with angular
 persistence for cross-country soaring flights. Companion code for the
-manuscript *"A cycle-based model for the universal Hurst exponent in
-thermal soaring flights"* (Di Sante, 2026), which extends the empirical
+manuscript *"How directional persistence sets the Hurst exponent of thermal soaring
+flights"* (Di Sante, 2026), which extends the empirical
 analysis of Vilpellet, Darmon & Benzaquen
 ([arXiv:2601.01293](https://arxiv.org/abs/2601.01293), VDB hereafter).
 
