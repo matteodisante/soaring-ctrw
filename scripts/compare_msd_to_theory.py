@@ -548,17 +548,30 @@ def main() -> None:
         cm = cfg.climb_motion
         omega_0 = 2.0 * np.pi / cm.T_turn_mean
         sigma_omega = omega_0 * cm.T_turn_std / cm.T_turn_mean
-        print(
-            f"  {ac}: sigma_theta={cfg.angular.sigma_theta:.4f}  "
-            f"<T>={mean_T:.1f} s  A={A:.3g}  B={B:.3g}  "
-            f"rho={rho:.4f}  n_c={2/cfg.angular.sigma_theta**2:.2f}"
-        )
-        print(
-            f"  {ac}: T_turn_mean={cm.T_turn_mean:.3f} s  "
-            f"T_turn_std={cm.T_turn_std:.3f} s  "
-            f"omega_0=2*pi/T_turn_mean={omega_0:.6f} rad/s  "
-            f"sigma_omega=omega_0*T_turn_std/T_turn_mean={sigma_omega:.6f} rad/s"
-        )
+        # Breakdown of A and B (Eq. 23) and their v_xy^2-rescaled forms.
+        v_xy2 = cfg.v_xy ** 2
+        var_T_phase = lomax_var(cfg.transition.params["mu"],
+                                cfg.transition.params["tau_0"])
+        B_transition = v_xy2 * var_T_phase
+        Sigma_S = compute_Sigma_S(cfg)
+        Sigma_C = compute_Sigma_C(cfg)
+        print(f"\n=== {AIRCRAFT_LABELS.get(ac, ac)} ===")
+        print( "  calibration:")
+        print(f"    sigma_theta = {cfg.angular.sigma_theta:.4f}"
+              f"      n_c = 2/sigma_theta^2 = {2/cfg.angular.sigma_theta**2:.2f}")
+        print(f"    <T>         = {mean_T:.1f} s"
+              f"      rho = {rho:.4f}")
+        print( "  MSD coefficients (Eq. 23):")
+        print(f"    A = {A:.4g} m^2        A_hat = A/v_xy^2 = {A / v_xy2:.4g} s^2")
+        print(f"    B = {B:.4g} m^2        B_hat = B/v_xy^2 = {B / v_xy2:.4g} s^2")
+        print( "  B breakdown                        [m^2]            [s^2 = /v_xy^2]")
+        print(f"    v_xy^2 * Var(T_T)       = {B_transition:>12.4g}   {var_T_phase:>14.4g}")
+        print(f"    Sigma_S                 = {Sigma_S:>12.4g}   {Sigma_S / v_xy2:>14.4g}")
+        print(f"    Sigma_C                 = {Sigma_C:>12.4g}   {Sigma_C / v_xy2:>14.4g}")
+        print( "  climb circling:")
+        print(f"    T_turn = {cm.T_turn_mean:.3f} +/- {cm.T_turn_std:.3f} s")
+        print(f"    omega_0 = 2*pi/T_turn_mean              = {omega_0:.6f} rad/s")
+        print(f"    sigma_omega = omega_0*T_turn_std/T_turn_mean = {sigma_omega:.6f} rad/s")
         if args.write:
             payload = {
                 "source_script": "compare_msd_to_theory",
