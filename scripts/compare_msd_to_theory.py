@@ -392,6 +392,104 @@ def plot_Heff(configs: dict[str, SoaringConfig],
     plt.close(fig)
 
 
+def compute_theory_components(N: np.ndarray, cfg: SoaringConfig) -> dict[str, np.ndarray]:
+    """Evaluate every analytical building block of Eqs. 23 / 26 at the
+    cycle counts ``N`` and return them in a dict.
+
+    Keys:
+      - ``msd``      : Eq. 23 MSD, ``A G_N(rho) + B N``.
+      - ``G``        : Eq. 21 ``G_N(rho)``.
+      - ``Gp``       : ``dG_N/dN`` (used by Eq. 26).
+      - ``s_G``      : local log-log slope of ``G_N``, ``N G'_N / G_N``.
+      - ``w``        : crossover weight ``A G_N / (A G_N + B N)``.
+      - ``one_minus_w``: ``1 - w``.
+      - ``Heff``     : Eq. 26 ``H_eff(N) = 0.5 (1 + w (s_G - 1))``.
+    """
+    A, B, rho, _ = compute_AB(cfg)
+    G = G_N(N, rho)
+    Gp = G_N_prime(N, rho)
+    s_G = N * Gp / G
+    w = A * G / (A * G + B * N)
+    Heff = 0.5 * (1.0 + w * (s_G - 1.0))
+    return {
+        "msd": A * G + B * N,
+        "G": G,
+        "Gp": Gp,
+        "s_G": s_G,
+        "w": w,
+        "one_minus_w": 1.0 - w,
+        "Heff": Heff,
+    }
+
+
+def plot_theory_components(configs: dict[str, SoaringConfig],
+                           output_path: Path, aircrafts: list[str],
+                           n_cycles: int = 60) -> None:
+    """Two-row × one-column-per-aircraft figure of the analytical
+    functions vs cycle count ``N`` (no simulation involved).
+
+    Curves are grouped by magnitude:
+
+      - top row (log-log): the extensive quantities sharing a large
+        dynamic range — the MSD ``A G_N + B N`` (Eq. 23), ``G_N(rho)``
+        (Eq. 21) and its derivative ``G'_N``.
+      - bottom row (semilog-x, linear ``y``): the dimensionless ``O(1)``
+        quantities — the local slope ``s_G``, the crossover weight
+        ``w`` and ``1 - w``, and the effective Hurst exponent
+        ``H_eff`` (Eq. 26).
+    """
+    n = len(aircrafts)
+    fig, axes = plt.subplots(2, n, figsize=(5.5 * n, 8.4),
+                             constrained_layout=True, squeeze=False)
+    N_grid = np.geomspace(1.0, float(max(2, n_cycles)), 400)
+    for col, (ac, letter) in enumerate(zip(aircrafts, PANEL_LETTERS)):
+        cfg = configs[ac]
+        comp = compute_theory_components(N_grid, cfg)
+        n_c = 2.0 / cfg.angular.sigma_theta ** 2
+
+        # --- top row: extensive quantities (log-log) ---------------
+        ax_top = axes[0][col]
+        ax_top.loglog(N_grid, comp["msd"], "-", lw=1.8, color="tab:red",
+                      label=r"MSD: $A\,G_N(\rho)+B\,N$ (Eq. 23)")
+        ax_top.loglog(N_grid, comp["G"], "-", lw=1.6, color="tab:blue",
+                      label=r"$G_N(\rho)$ (Eq. 21)")
+        ax_top.loglog(N_grid, comp["Gp"], "--", lw=1.6, color="tab:green",
+                      label=r"$G'_N = \mathrm{d}G_N/\mathrm{d}N$")
+        ax_top.axvline(n_c, color="0.5", ls=":", lw=0.8,
+                       label=rf"$n_c={n_c:.1f}$")
+        ax_top.set_xlabel(r"$N$  (cycles)")
+        if col == 0:
+            ax_top.set_ylabel("extensive quantities")
+        ax_top.set_title(f"({letter}) {AIRCRAFT_LABELS[ac]}",
+                         fontsize=10, loc="left")
+        ax_top.grid(True, which="both", ls=":", alpha=0.4)
+        ax_top.legend(fontsize=8.5, loc="upper left")
+
+        # --- bottom row: dimensionless O(1) quantities (semilog-x) --
+        ax_bot = axes[1][col]
+        ax_bot.semilogx(N_grid, comp["s_G"], "-", lw=1.6, color="tab:purple",
+                        label=r"$s_G = N\,G'_N/G_N$")
+        ax_bot.semilogx(N_grid, comp["w"], "-", lw=1.6, color="tab:orange",
+                        label=r"$w = A\,G_N/(A\,G_N+B\,N)$")
+        ax_bot.semilogx(N_grid, comp["one_minus_w"], "--", lw=1.4,
+                        color="tab:brown", label=r"$1-w$")
+        ax_bot.semilogx(N_grid, comp["Heff"], "-", lw=2.0, color="tab:red",
+                        label=r"$H_{\mathrm{eff}}$ (Eq. 26)")
+        ax_bot.axhline(1.0, color="0.7", ls="--", lw=0.6)
+        ax_bot.axhline(0.5, color="0.7", ls="--", lw=0.6)
+        ax_bot.axvline(n_c, color="0.5", ls=":", lw=0.8,
+                       label=rf"$n_c={n_c:.1f}$")
+        ax_bot.set_xlabel(r"$N$  (cycles)")
+        if col == 0:
+            ax_bot.set_ylabel("dimensionless quantities")
+        ax_bot.grid(True, which="both", ls=":", alpha=0.4)
+        ax_bot.legend(fontsize=8.5, loc="center left")
+    fig.suptitle("Analytical components of Eqs. 21 / 23 / 26 vs cycle "
+                 "count $N$", fontsize=11)
+    fig.savefig(output_path, bbox_inches="tight")
+    plt.close(fig)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -524,8 +622,14 @@ def main() -> None:
               list(args.aircraft),
               win_factor=args.win_factor)
 
+    # Pure-theory breakdown of Eqs. 21 / 23 / 26 vs N (no simulation).
+    plot_theory_components(configs,
+                           args.figures_dir / "compare_theory_components.pdf",
+                           list(args.aircraft),
+                           n_cycles=args.n_cycles)
+
     print("\nSaved figures:")
-    for name in ("msd_search", "msd_climb", "msd_cycles", "Heff"):
+    for name in ("msd_search", "msd_climb", "msd_cycles", "Heff", "components"):
         print(f"  {args.figures_dir / f'compare_theory_{name}.pdf'}")
 
 
