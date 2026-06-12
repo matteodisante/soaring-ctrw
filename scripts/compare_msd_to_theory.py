@@ -1,4 +1,9 @@
-"""Compare simulated MSDs to the analytical formulas of ``paper_prl.tex``.
+"""Compare simulated MSDs to the analytical formulas of ``soaring_ctrw.tex``.
+
+Equation numbers in the comments below are indicative; the authoritative
+references are the ``\\label`` names in the manuscript (e.g.
+``eq:msd-search``, ``eq:msd-climb``, ``eq:msd-closed``,
+``eq:Heff-convex``, ``eq:GN``, ``eq:SigmaS``, ``eq:SigmaC``).
 
 Four comparison figures, one per analytical formula. Each figure has
 three panels (one per aircraft):
@@ -299,29 +304,48 @@ def plot_climb(configs: dict[str, SoaringConfig],
 
 
 def simulate_cycle_msd(cfg: SoaringConfig, n_cycles: int, n_traj: int,
-                       rng: np.random.Generator) -> np.ndarray:
+                       rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
     """Simulate ``n_traj`` independent trajectories of exactly
-    ``n_cycles`` cycles and return ``⟨|X_N|²⟩`` for ``N = 0, …,
-    n_cycles`` — the position at the end of each cycle averaged over
-    the ensemble. No time-to-cycle conversion is involved: this is the
-    direct cycle-counted quantity the closed-form MSD predicts.
+    ``n_cycles`` cycles and return ``(msd, sem)`` for ``N = 0, …,
+    n_cycles`` — the end-of-cycle ``⟨|X_N|²⟩`` averaged over the
+    ensemble together with its per-N standard error of the mean. No
+    time-to-cycle conversion is involved: this is the direct
+    cycle-counted quantity the closed-form MSD predicts.
+
+    The SEM is reported because, for the near-critical classes
+    (``mu_T < 4``: sailplanes and paragliders), the per-cycle squared
+    displacement is heavy-tailed and the estimator converges slowly.
     """
-    sq = np.zeros(n_cycles + 1, dtype=float)
+    s1 = np.zeros(n_cycles + 1, dtype=float)
+    s2 = np.zeros(n_cycles + 1, dtype=float)
     for _ in range(n_traj):
         traj = simulate_single(cfg, n_cycles=n_cycles, rng=rng)
-        sq += (traj.positions ** 2).sum(axis=1)
-    return sq / n_traj
+        r2 = (traj.positions ** 2).sum(axis=1)
+        s1 += r2
+        s2 += r2 * r2
+    mean = s1 / n_traj
+    var = s2 / n_traj - mean ** 2
+    var = np.where(np.isfinite(var) & (var > 0), var, 0.0)
+    sem = np.sqrt(var / n_traj)
+    return mean, sem
 
 
 def plot_cycles(configs: dict[str, SoaringConfig],
                 cycle_msd: dict[str, np.ndarray], output_path: Path,
-                aircrafts: list[str]) -> None:
+                aircrafts: list[str],
+                cycle_sem: dict[str, np.ndarray] | None = None) -> None:
     fig, axes = _setup_axes(aircrafts)
     for ax, ac, letter in zip(axes, aircrafts, PANEL_LETTERS):
         cfg = configs[ac]
         sq = cycle_msd[ac]
         N_arr = np.arange(len(sq))
         m = N_arr > 0
+        if cycle_sem is not None and ac in cycle_sem:
+            sem = cycle_sem[ac]
+            mb = m & np.isfinite(sem) & (sq - sem > 0)
+            ax.fill_between(N_arr[mb], sq[mb] - sem[mb], sq[mb] + sem[mb],
+                            color=COLOR_SIM, alpha=0.25, lw=0,
+                            label=r"$\pm1$ SEM")
         ax.loglog(N_arr[m], sq[m], "o", ms=4, color=COLOR_SIM,
                   alpha=0.8, label=r"simulated $\langle|\mathbf{X}_N|^2\rangle$")
         A, B, rho, mean_T = compute_AB(cfg)
@@ -618,18 +642,19 @@ def main() -> None:
         + f" × {args.n_cycles} cycles)..."
     )
     cycle_msd: dict[str, np.ndarray] = {}
+    cycle_sem: dict[str, np.ndarray] = {}
     for i, ac in enumerate(args.aircraft):
         # Deterministic per-aircraft offset (avoid Python's randomised
         # str hash, which makes runs non-reproducible across processes).
         rng = np.random.default_rng(args.seed_cycles + i)
-        cycle_msd[ac] = simulate_cycle_msd(
+        cycle_msd[ac], cycle_sem[ac] = simulate_cycle_msd(
             configs[ac], n_cycles=args.n_cycles,
             n_traj=n_traj_map[ac], rng=rng,
         )
         print(f"  {ac}: done")
     plot_cycles(configs, cycle_msd,
                 args.figures_dir / "compare_theory_msd_cycles.pdf",
-                list(args.aircraft))
+                list(args.aircraft), cycle_sem=cycle_sem)
     plot_Heff(configs, cycle_msd,
               args.figures_dir / "compare_theory_Heff.pdf",
               list(args.aircraft),

@@ -22,6 +22,8 @@ import numpy as np
 __all__ = [
     "HurstFit",
     "msd_ensemble",
+    "msd_ensemble_sem",
+    "msd_ensemble_ci",
     "fit_hurst",
 ]
 
@@ -43,6 +45,10 @@ class HurstFit:
         The (min, max) lag in seconds actually used for the fit.
     n_points : int
         Number of lag values used.
+    slope_err : float
+        Standard error of the fitted log-log slope from the ordinary
+        least-squares regression (``NaN`` if fewer than 3 points). The
+        Hurst-exponent standard error is ``slope_err / 2``.
     """
 
     hurst: float
@@ -50,6 +56,12 @@ class HurstFit:
     intercept: float
     fit_range: tuple[float, float]
     n_points: int
+    slope_err: float = float("nan")
+
+    @property
+    def hurst_err(self) -> float:
+        """Standard error of the Hurst exponent, ``slope_err / 2``."""
+        return self.slope_err / 2.0
 
 
 def msd_ensemble(ensemble: np.ndarray) -> np.ndarray:
@@ -88,6 +100,67 @@ def msd_ensemble(ensemble: np.ndarray) -> np.ndarray:
     disp = ensemble - ensemble[:, 0:1, :]      # (M, N, d)
     sq = np.sum(disp * disp, axis=2)            # (M, N)
     return sq.mean(axis=0)                       # (N,)
+
+
+def _squared_displacements(ensemble: np.ndarray) -> np.ndarray:
+    """Return the (M, N) array of squared displacements from each
+    trajectory's own origin. Shared by the MSD point estimate and its
+    error estimators."""
+    if ensemble.ndim != 3:
+        raise ValueError(
+            "ensemble must have shape (n_trajectories, n_steps, d), "
+            f"got shape {ensemble.shape}"
+        )
+    ensemble = np.asarray(ensemble, dtype=float)
+    disp = ensemble - ensemble[:, 0:1, :]
+    return np.sum(disp * disp, axis=2)
+
+
+def msd_ensemble_sem(ensemble: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    r"""EA-MSD with its per-lag standard error of the mean (SEM).
+
+    Returns ``(msd, sem)`` where ``sem[k] = std_m(|r_m(k)-r_m(0)|^2) /
+    sqrt(M)`` (sample std, ``ddof=1``). The SEM is the Gaussian 1-sigma
+    error on the mean; for the heavy-tailed classes (``mu_T < 4``) it
+    understates the true spread and :func:`msd_ensemble_ci` should be
+    preferred.
+    """
+    sq = _squared_displacements(ensemble)
+    m = sq.shape[0]
+    msd = sq.mean(axis=0)
+    sem = sq.std(axis=0, ddof=1) / np.sqrt(m) if m > 1 else np.full(sq.shape[1], np.nan)
+    return msd, sem
+
+
+def msd_ensemble_ci(
+    ensemble: np.ndarray,
+    n_boot: int = 1000,
+    ci: float = 0.95,
+    rng: np.random.Generator | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    r"""EA-MSD with a non-parametric bootstrap confidence interval.
+
+    Resamples the ``M`` trajectories with replacement ``n_boot`` times
+    and returns ``(msd, lo, hi)``, where ``lo``/``hi`` are the
+    ``(1±ci)/2`` quantiles of the bootstrap distribution of the EA-MSD
+    at each lag. Robust to the heavy-tailed per-trajectory squared
+    displacement of the near-critical classes (``mu_T < 4``), unlike the
+    Gaussian SEM.
+    """
+    if not (0.0 < ci < 1.0):
+        raise ValueError(f"ci must be in (0, 1), got {ci}")
+    sq = _squared_displacements(ensemble)
+    m, n = sq.shape
+    msd = sq.mean(axis=0)
+    if rng is None:
+        rng = np.random.default_rng()
+    boot = np.empty((n_boot, n), dtype=float)
+    for b in range(n_boot):
+        idx = rng.integers(0, m, size=m)
+        boot[b] = sq[idx].mean(axis=0)
+    lo = np.quantile(boot, (1.0 - ci) / 2.0, axis=0)
+    hi = np.quantile(boot, 1.0 - (1.0 - ci) / 2.0, axis=0)
+    return msd, lo, hi
 
 
 def fit_hurst(
@@ -139,10 +212,25 @@ def fit_hurst(
     log_msd = np.log(msd[mask])
     slope, intercept = np.polyfit(log_lags, log_msd, 1)
 
+    # Standard error of the OLS slope from the residuals (unweighted fit):
+    # SE = sqrt( (Σresid² / (n-2)) / Σ(x-x̄)² ). NaN for fewer than 3 points.
+    n = log_lags.size
+    if n > 2:
+        resid = log_msd - (slope * log_lags + intercept)
+        sxx = float(np.sum((log_lags - log_lags.mean()) ** 2))
+        slope_err = (
+            float(np.sqrt(np.sum(resid ** 2) / (n - 2) / sxx))
+            if sxx > 0.0
+            else float("nan")
+        )
+    else:
+        slope_err = float("nan")
+
     return HurstFit(
         hurst=slope / 2.0,
         slope=slope,
         intercept=intercept,
         fit_range=(lag_min, lag_max),
         n_points=int(mask.sum()),
+        slope_err=slope_err,
     )

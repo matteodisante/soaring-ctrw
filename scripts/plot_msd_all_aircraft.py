@@ -55,7 +55,7 @@ from soaring_ctrw.cache import (
 )
 from soaring_ctrw.calibration import calibration_path, load_calibrated_config
 from soaring_ctrw.model import SoaringConfig
-from soaring_ctrw.observables import msd_ensemble
+from soaring_ctrw.observables import msd_ensemble_ci
 from soaring_ctrw.paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR
 from soaring_ctrw.simulation import simulate_ensemble
 
@@ -84,7 +84,9 @@ def _compute_msd(
     total_time: float,
     dt: float,
     seed: int,
-) -> tuple[np.ndarray, np.ndarray]:
+    n_boot: int = 1000,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return ``(lags, msd, msd_lo, msd_hi)`` with a bootstrap 95% CI band."""
     rng = np.random.default_rng(
         derived_seed(seed, config.name, SCRIPT_SLUG)
     )
@@ -92,9 +94,12 @@ def _compute_msd(
         config=config, n_trajectories=n_trajectories,
         total_time=total_time, dt=dt, rng=rng,
     )
-    msd = msd_ensemble(ens)
+    boot_rng = np.random.default_rng(
+        derived_seed(seed, config.name, SCRIPT_SLUG + "_boot")
+    )
+    msd, lo, hi = msd_ensemble_ci(ens, n_boot=n_boot, ci=0.95, rng=boot_rng)
     lags = np.arange(len(msd)) * dt
-    return lags, msd
+    return lags, msd, lo, hi
 
 
 def _local_slope(
@@ -130,11 +135,12 @@ def _fit_powerlaw(
     msd: np.ndarray,
     fit_min: float,
     fit_max: float,
-) -> tuple[float, float] | None:
+) -> tuple[float, float, float] | None:
     """Linear fit of log MSD vs log lag over ``[fit_min, fit_max]``.
 
-    Returns ``(slope, intercept)`` or ``None`` if fewer than 2 points
-    are in range.
+    Returns ``(slope, intercept, slope_err)`` or ``None`` if fewer than
+    2 points are in range. ``slope_err`` is the OLS standard error of
+    the slope (``NaN`` for fewer than 3 points).
     """
     mask = (
         (lags >= fit_min) & (lags <= fit_max)
@@ -142,8 +148,20 @@ def _fit_powerlaw(
     )
     if mask.sum() < 2:
         return None
-    slope, intercept = np.polyfit(np.log(lags[mask]), np.log(msd[mask]), 1)
-    return float(slope), float(intercept)
+    x = np.log(lags[mask])
+    y = np.log(msd[mask])
+    slope, intercept = np.polyfit(x, y, 1)
+    n = x.size
+    if n > 2:
+        resid = y - (slope * x + intercept)
+        sxx = float(np.sum((x - x.mean()) ** 2))
+        slope_err = (
+            float(np.sqrt(np.sum(resid ** 2) / (n - 2) / sxx))
+            if sxx > 0.0 else float("nan")
+        )
+    else:
+        slope_err = float("nan")
+    return float(slope), float(intercept), slope_err
 
 
 # ---------------------------------------------------------------------------
@@ -164,9 +182,10 @@ def _plot_raw_with_slope(
     (bottom, one curve per aircraft).
 
     The fit window matches the empirical VDB window
-    ``[fit_min, lag_max] = [10, 6000]`` s by default. The fitted slope
-    and the corresponding effective Hurst exponent ``H = slope/2`` are
-    reported in the legend.
+    ``[fit_min, lag_max] = [10, 7000]`` s by default. The fitted slope
+    and the corresponding effective Hurst exponent ``H = slope/2`` (with
+    the standard error of the log-log regression) are reported in the
+    legend; a shaded band shows the bootstrap 95% CI of the MSD.
     """
     fig, (ax_msd, ax_slope) = plt.subplots(
         2, 1, figsize=(8.0, 8.5), constrained_layout=True, sharex=True,
@@ -178,7 +197,16 @@ def _plot_raw_with_slope(
             continue
         lags = curves[aircraft]["lags"]
         msd = curves[aircraft]["msd"]
+        lo = curves[aircraft].get("lo")
+        hi = curves[aircraft].get("hi")
         m = (lags >= lag_min) & (lags <= lag_max) & np.isfinite(msd) & (msd > 0)
+        # --- Bootstrap 95% CI band (if available) --------------------
+        if lo is not None and hi is not None:
+            mb = m & np.isfinite(lo) & np.isfinite(hi) & (lo > 0)
+            ax_msd.fill_between(
+                lags[mb], lo[mb], hi[mb],
+                color=COLORS[aircraft], alpha=0.20, lw=0,
+            )
         # --- MSD curve ------------------------------------------------
         ax_msd.loglog(
             lags[m], msd[m],
@@ -188,14 +216,15 @@ def _plot_raw_with_slope(
         # --- Power-law fit over [fit_min, lag_max] --------------------
         fit = _fit_powerlaw(lags, msd, fit_min, lag_max)
         if fit is not None:
-            slope, intercept = fit
+            slope, intercept, slope_err = fit
             grid = np.geomspace(fit_min, lag_max, 80)
+            h_err = slope_err / 2.0
             ax_msd.loglog(
                 grid, np.exp(intercept) * grid ** slope,
                 "--", color=COLORS[aircraft], lw=1.4, alpha=0.95,
                 label=(
                     rf"  fit {LABELS[aircraft]}: slope $={slope:.3f}$  "
-                    rf"($H={slope/2:.3f}$)"
+                    rf"($H={slope/2:.3f}\pm{h_err:.3f}$)"
                 ),
             )
         # --- Local log-log slope -------------------------------------
@@ -252,9 +281,17 @@ def _plot_rescaled(
         v_xy = float(configs[aircraft].v_xy)
         lags = curves[aircraft]["lags"]
         msd = curves[aircraft]["msd"]
+        lo = curves[aircraft].get("lo")
+        hi = curves[aircraft].get("hi")
         msd_resc = msd / (v_xy ** 2)
         m = (lags >= lag_min) & (lags <= lag_max) & np.isfinite(msd_resc) & (msd_resc > 0)
 
+        if lo is not None and hi is not None:
+            mb = m & np.isfinite(lo) & np.isfinite(hi) & (lo > 0)
+            ax.fill_between(
+                lags[mb], lo[mb] / v_xy ** 2, hi[mb] / v_xy ** 2,
+                color=COLORS[aircraft], alpha=0.18, lw=0,
+            )
         ax.loglog(
             lags[m], msd_resc[m],
             "o", color=COLORS[aircraft], ms=3.0, alpha=0.7, mew=0,
@@ -309,6 +346,10 @@ def main() -> None:
         help="Lower edge of the power-law fit on the rescaled MSD (s). "
              "Upper edge = --lag-max.",
     )
+    parser.add_argument(
+        "--n-boot", type=int, default=1000,
+        help="Bootstrap resamples for the 95%% CI band on the MSD.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
     parser.add_argument("--figures-dir", type=Path, default=FIGURES_DIR)
@@ -340,6 +381,7 @@ def main() -> None:
                 "total_time": args.total_time,
                 "dt": args.dt,
                 "seed": args.seed,
+                "n_boot": args.n_boot,
                 "msd_estimator": "ea",
             },
             # Hash both the input YAML and the calibration YAML so the
@@ -367,14 +409,18 @@ def main() -> None:
             arrays, _ = load_dataset(npz_path, manifest_path)
             lags = arrays["lags"]
             msd = arrays["msd"]
+            # Older caches predate the bootstrap CI; fall back to None.
+            msd_lo = arrays["msd_lo"] if "msd_lo" in arrays else None
+            msd_hi = arrays["msd_hi"] if "msd_hi" in arrays else None
         else:
             print(
                 f"  simulating {args.n_trajectories} traj "
                 f"× {args.total_time:.0f} s ..."
             )
             t0 = time.time()
-            lags, msd = _compute_msd(
-                config, args.n_trajectories, args.total_time, args.dt, args.seed,
+            lags, msd, msd_lo, msd_hi = _compute_msd(
+                config, args.n_trajectories, args.total_time, args.dt,
+                args.seed, n_boot=args.n_boot,
             )
             print(f"  done in {time.time() - t0:.1f} s")
             if args.cache != "off":
@@ -382,11 +428,16 @@ def main() -> None:
                     npz_path=npz_path,
                     manifest_path=manifest_path,
                     manifest=requested,
-                    arrays={"lags": lags, "msd": msd},
+                    arrays={
+                        "lags": lags, "msd": msd,
+                        "msd_lo": msd_lo, "msd_hi": msd_hi,
+                    },
                 )
                 print(f"  saved data: {npz_path}")
 
-        curves[aircraft] = {"lags": lags, "msd": msd}
+        curves[aircraft] = {
+            "lags": lags, "msd": msd, "lo": msd_lo, "hi": msd_hi,
+        }
 
     raw_path = args.figures_dir / f"{SCRIPT_SLUG}_raw.pdf"
     _plot_raw_with_slope(

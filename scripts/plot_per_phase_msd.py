@@ -170,6 +170,7 @@ def _compute_per_phase_msd(
     """
     lags = np.arange(n_lags) * dt
     sq_sum = {p: np.zeros(n_lags, dtype=float) for p in PHASES}
+    sq_sq = {p: np.zeros(n_lags, dtype=float) for p in PHASES}
     count = {p: np.zeros(n_lags, dtype=float) for p in PHASES}
     n_episodes = {p: 0 for p in PHASES}
 
@@ -192,7 +193,9 @@ def _compute_per_phase_msd(
                 # truly is zero — compute the difference explicitly to
                 # be robust to any future change in _phase_positions.
                 disp = pos[:k_max] - pos[0]
-                sq_sum[phase][:k_max] += np.sum(disp * disp, axis=1)
+                val = np.sum(disp * disp, axis=1)
+                sq_sum[phase][:k_max] += val
+                sq_sq[phase][:k_max] += val * val
                 count[phase][:k_max] += 1.0
                 n_episodes[phase] += 1
 
@@ -203,10 +206,20 @@ def _compute_per_phase_msd(
             )
             logger.info("traj %d/%d elapsed=%.1fs", i + 1, n_trajectories, elapsed)
 
-    msd = {p: sq_sum[p] / np.where(count[p] > 0, count[p], np.nan) for p in PHASES}
+    msd: dict[str, np.ndarray] = {}
+    sem: dict[str, np.ndarray] = {}
+    for p in PHASES:
+        c = np.where(count[p] > 0, count[p], np.nan)
+        mean = sq_sum[p] / c
+        var = sq_sq[p] / c - mean ** 2
+        var = np.where(np.isfinite(var) & (var > 0), var, 0.0)
+        # SEM of the pooled per-episode squared displacement at each lag.
+        sem[p] = np.sqrt(var / c)
+        msd[p] = mean
     return {
         "lags": lags,
         "msd_T": msd["T"], "msd_S": msd["S"], "msd_C": msd["C"],
+        "sem_T": sem["T"], "sem_S": sem["S"], "sem_C": sem["C"],
         "count_T": count["T"], "count_S": count["S"], "count_C": count["C"],
         "n_episodes_T": np.array([n_episodes["T"]]),
         "n_episodes_S": np.array([n_episodes["S"]]),
@@ -248,11 +261,12 @@ def _fit_log_log(
     msd: np.ndarray,
     fit_min: float,
     fit_max: float,
-) -> tuple[float, float] | None:
+) -> tuple[float, float, float] | None:
     """Linear fit of log(MSD) vs log(lag) over ``[fit_min, fit_max]``.
 
-    Returns ``(slope, intercept)`` or ``None`` if fewer than 2 valid
-    points are in range.
+    Returns ``(slope, intercept, slope_err)`` or ``None`` if fewer than
+    2 valid points are in range. ``slope_err`` is the OLS standard error
+    of the slope (``NaN`` for fewer than 3 points).
     """
     mask = (
         (lags >= fit_min) & (lags <= fit_max)
@@ -260,8 +274,20 @@ def _fit_log_log(
     )
     if mask.sum() < 2:
         return None
-    slope, intercept = np.polyfit(np.log(lags[mask]), np.log(msd[mask]), 1)
-    return float(slope), float(intercept)
+    x = np.log(lags[mask])
+    y = np.log(msd[mask])
+    slope, intercept = np.polyfit(x, y, 1)
+    n = x.size
+    if n > 2:
+        resid = y - (slope * x + intercept)
+        sxx = float(np.sum((x - x.mean()) ** 2))
+        slope_err = (
+            float(np.sqrt(np.sum(resid ** 2) / (n - 2) / sxx))
+            if sxx > 0.0 else float("nan")
+        )
+    else:
+        slope_err = float("nan")
+    return float(slope), float(intercept), slope_err
 
 
 def _plot_combined(
@@ -294,8 +320,18 @@ def _plot_combined(
         slope_text: list[str] = []
         for p in PHASES:
             msd = data[f"msd_{p}"]
+            sem = data[f"sem_{p}"] if f"sem_{p}" in data else None
             m = (lags > 0) & np.isfinite(msd) & (msd > 0)
             base_label = PHASE_LABELS[p]
+
+            # SEM band (if available): one standard error of the pooled
+            # per-episode squared displacement at each lag.
+            if sem is not None:
+                mb = m & np.isfinite(sem) & (msd - sem > 0)
+                ax.fill_between(
+                    lags[mb], msd[mb] - sem[mb], msd[mb] + sem[mb],
+                    color=PHASE_COLORS[p], alpha=0.25, lw=0,
+                )
 
             # Marker series: keep the legend uniform across panels
             # (only the leftmost panel populates the shared bottom
@@ -311,13 +347,14 @@ def _plot_combined(
             fit_min, fit_max = fit_ranges[p]
             fit = _fit_log_log(lags, msd, fit_min, fit_max)
             if fit is not None:
-                slope, intercept = fit
+                slope, intercept, slope_err = fit
                 grid = np.geomspace(fit_min, fit_max, 60)
                 ax.loglog(
                     grid, fit_offset * np.exp(intercept) * grid ** slope,
                     "--", color=PHASE_COLORS[p], lw=1.5, alpha=0.95,
                 )
-                slope_text.append(rf"{base_label}: $\alpha={slope:.3f}$")
+                err_str = "" if not np.isfinite(slope_err) else rf"\pm{slope_err:.3f}"
+                slope_text.append(rf"{base_label}: $\alpha={slope:.3f}{err_str}$")
             else:
                 slope_text.append(rf"{base_label}: $\alpha=$N/A")
 

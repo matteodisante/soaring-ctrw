@@ -1,0 +1,24 @@
+{
+  "script": "estimate_sigma_theta",
+  "params": {
+    "mode": "full",
+    "n_sigma": 16,
+    "sigma_min": 0.05,
+    "sigma_max": 1.5,
+    "n_trajectories": 1000,
+    "total_time": 15000.0,
+    "dt": 1.0,
+    "fit_min": 10.0,
+    "fit_max": 7000.0,
+    "seed": 42,
+    "msd_estimator": "ea"
+  },
+  "configs": {
+    "aircraft": {
+      "path": "/Users/matteodisante/Documents/university/LM/Tesi_LM/econophysix_paris/disante_soaring_flights/soaring-ctrw/configs/hang_gliders.yaml",
+      "sha256": "8dbdf2516bd56c977727e84eabe00f3210afb848e002a5d25357f3586380a9d3"
+    }
+  },
+  "created_at": "2026-05-26T02:37:44+0200",
+  "git_commit": "4a02b17"
+}

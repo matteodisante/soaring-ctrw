@@ -1,0 +1,20 @@
+{
+  "script": "per_phase_msd",
+  "params": {
+    "n_trajectories": 1000,
+    "n_cycles": 50,
+    "dt": 1.0,
+    "max_lag": 500.0,
+    "max_samples_per_episode": 2004,
+    "seed": 42,
+    "msd_estimator": "ea"
+  },
+  "configs": {
+    "aircraft": {
+      "path": "/Users/matteodisante/Documents/university/LM/Tesi_LM/econophysix_paris/disante_soaring_flights/soaring-ctrw/configs/hang_gliders.yaml",
+      "sha256": "8dbdf2516bd56c977727e84eabe00f3210afb848e002a5d25357f3586380a9d3"
+    }
+  },
+  "created_at": "2026-05-26T02:35:34+0200",
+  "git_commit": "4a02b17"
+}

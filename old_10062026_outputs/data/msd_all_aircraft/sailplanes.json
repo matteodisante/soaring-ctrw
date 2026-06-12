@@ -1,0 +1,22 @@
+{
+  "script": "msd_all_aircraft",
+  "params": {
+    "n_trajectories": 500,
+    "total_time": 15000.0,
+    "dt": 1.0,
+    "seed": 42,
+    "msd_estimator": "ea"
+  },
+  "configs": {
+    "aircraft": {
+      "path": "/Users/matteodisante/Documents/university/LM/Tesi_LM/econophysix_paris/disante_soaring_flights/soaring-ctrw/configs/sailplanes.yaml",
+      "sha256": "e2270909be00642e1a2f9ca363219235b1dc1d4c3023a232dbe87b4be44427de"
+    },
+    "calibration": {
+      "path": "/Users/matteodisante/Documents/university/LM/Tesi_LM/econophysix_paris/disante_soaring_flights/soaring-ctrw/outputs/data/calibration/sailplanes.yaml",
+      "sha256": "cc311542dc9e8b148680a42c4eb9808204b1b898c08904ae6c907c33fe41f90f"
+    }
+  },
+  "created_at": "2026-05-26T02:42:12+0200",
+  "git_commit": "4a02b17"
+}
