@@ -153,6 +153,9 @@ def _compute_per_phase_msd(
     max_samples_per_episode: int,
     rng: np.random.Generator,
     logger: logging.Logger,
+    band_sample: int = 5000,
+    q_lo: float = 5.0,
+    q_hi: float = 95.0,
 ) -> dict[str, np.ndarray]:
     """Compute pure ensemble-averaged MSD per phase.
 
@@ -162,17 +165,27 @@ def _compute_per_phase_msd(
     lag). The MSD at lag ``k`` is then the mean over the subset of
     episodes whose physical duration reaches ``k·dt``.
 
+    The band arrays ``q05_X``/``q95_X`` are the direct ``q_lo``/``q_hi``
+    percentiles (default 5--95) of the same per-episode squared
+    displacements. To bound memory they are computed on the first
+    ``band_sample`` episodes per phase; episodes are i.i.d. across
+    cycles and trajectories, so this subset is an unbiased sample.
+
     Returns
     -------
     dict with keys ``lags``, ``msd_T``, ``msd_S``, ``msd_C``,
+    ``q05_T`` … ``q95_C`` (sample-percentile band),
     ``count_T``, ``count_S``, ``count_C`` (= number of episodes
     contributing at each lag), ``n_episodes_T`` etc.
     """
     lags = np.arange(n_lags) * dt
     sq_sum = {p: np.zeros(n_lags, dtype=float) for p in PHASES}
-    sq_sq = {p: np.zeros(n_lags, dtype=float) for p in PHASES}
     count = {p: np.zeros(n_lags, dtype=float) for p in PHASES}
     n_episodes = {p: 0 for p in PHASES}
+    band_vals = {
+        p: np.full((band_sample, n_lags), np.nan, dtype=np.float32)
+        for p in PHASES
+    }
 
     t0 = time.time()
     for i in range(n_trajectories):
@@ -195,8 +208,9 @@ def _compute_per_phase_msd(
                 disp = pos[:k_max] - pos[0]
                 val = np.sum(disp * disp, axis=1)
                 sq_sum[phase][:k_max] += val
-                sq_sq[phase][:k_max] += val * val
                 count[phase][:k_max] += 1.0
+                if n_episodes[phase] < band_sample:
+                    band_vals[phase][n_episodes[phase], :k_max] = val
                 n_episodes[phase] += 1
 
         if (i + 1) % max(1, n_trajectories // 10) == 0:
@@ -207,19 +221,27 @@ def _compute_per_phase_msd(
             logger.info("traj %d/%d elapsed=%.1fs", i + 1, n_trajectories, elapsed)
 
     msd: dict[str, np.ndarray] = {}
-    sem: dict[str, np.ndarray] = {}
+    qlo: dict[str, np.ndarray] = {}
+    qhi: dict[str, np.ndarray] = {}
     for p in PHASES:
         c = np.where(count[p] > 0, count[p], np.nan)
-        mean = sq_sum[p] / c
-        var = sq_sq[p] / c - mean ** 2
-        var = np.where(np.isfinite(var) & (var > 0), var, 0.0)
-        # SEM of the pooled per-episode squared displacement at each lag.
-        sem[p] = np.sqrt(var / c)
-        msd[p] = mean
+        msd[p] = sq_sum[p] / c
+        # Direct sample-percentile band over the (first band_sample)
+        # episodes covering each lag. NaN rows (shorter episodes) are
+        # ignored, mirroring the conditioning of the mean.
+        used = band_vals[p][: min(n_episodes[p], band_sample)]
+        if used.shape[0] >= 2:
+            with np.errstate(all="ignore"):
+                qlo[p] = np.nanpercentile(used, q_lo, axis=0)
+                qhi[p] = np.nanpercentile(used, q_hi, axis=0)
+        else:
+            qlo[p] = np.full(n_lags, np.nan)
+            qhi[p] = np.full(n_lags, np.nan)
     return {
         "lags": lags,
         "msd_T": msd["T"], "msd_S": msd["S"], "msd_C": msd["C"],
-        "sem_T": sem["T"], "sem_S": sem["S"], "sem_C": sem["C"],
+        "q05_T": qlo["T"], "q05_S": qlo["S"], "q05_C": qlo["C"],
+        "q95_T": qhi["T"], "q95_S": qhi["S"], "q95_C": qhi["C"],
         "count_T": count["T"], "count_S": count["S"], "count_C": count["C"],
         "n_episodes_T": np.array([n_episodes["T"]]),
         "n_episodes_S": np.array([n_episodes["S"]]),
@@ -320,17 +342,18 @@ def _plot_combined(
         slope_text: list[str] = []
         for p in PHASES:
             msd = data[f"msd_{p}"]
-            sem = data[f"sem_{p}"] if f"sem_{p}" in data else None
+            blo = data[f"q05_{p}"] if f"q05_{p}" in data else None
+            bhi = data[f"q95_{p}"] if f"q95_{p}" in data else None
             m = (lags > 0) & np.isfinite(msd) & (msd > 0)
             base_label = PHASE_LABELS[p]
 
-            # SEM band (if available): one standard error of the pooled
-            # per-episode squared displacement at each lag.
-            if sem is not None:
-                mb = m & np.isfinite(sem) & (msd - sem > 0)
+            # Sample-percentile band (default 5-95%): direct percentiles
+            # of the per-episode squared displacements at each lag.
+            if blo is not None and bhi is not None:
+                mb = m & np.isfinite(blo) & np.isfinite(bhi) & (blo > 0)
                 ax.fill_between(
-                    lags[mb], msd[mb] - sem[mb], msd[mb] + sem[mb],
-                    color=PHASE_COLORS[p], alpha=0.25, lw=0,
+                    lags[mb], blo[mb], bhi[mb],
+                    color=PHASE_COLORS[p], alpha=0.18, lw=0,
                 )
 
             # Marker series: keep the legend uniform across panels
@@ -353,7 +376,7 @@ def _plot_combined(
                     grid, fit_offset * np.exp(intercept) * grid ** slope,
                     "--", color=PHASE_COLORS[p], lw=1.5, alpha=0.95,
                 )
-                err_str = "" if not np.isfinite(slope_err) else rf"\pm{slope_err:.3f}"
+                err_str = "" if not np.isfinite(slope_err) else rf"\pm{slope_err:.1g}"
                 slope_text.append(rf"{base_label}: $\alpha={slope:.3f}{err_str}$")
             else:
                 slope_text.append(rf"{base_label}: $\alpha=$N/A")
@@ -374,8 +397,13 @@ def _plot_combined(
 
     axes[0].set_ylabel(r"MSD (m$^2$)")
     handles, labels = axes[0].get_legend_handles_labels()
+    # Generic band entry (the shaded band is the direct 5--95th
+    # percentile of the per-episode squared displacements at each lag).
+    from matplotlib.patches import Patch
+    handles.append(Patch(facecolor="0.5", alpha=0.18, lw=0))
+    labels.append(r"5--95% of episodes")
     fig.legend(
-        handles, labels, loc="lower center", ncol=len(PHASES),
+        handles, labels, loc="lower center", ncol=len(PHASES) + 1,
         frameon=True, fontsize=10, bbox_to_anchor=(0.5, -0.02),
     )
     fig.savefig(output_path, bbox_inches="tight")
@@ -396,11 +424,30 @@ def main() -> None:
         default=["paragliders", "hang_gliders", "sailplanes"],
         choices=["paragliders", "hang_gliders", "sailplanes"],
     )
-    parser.add_argument("--n-trajectories", type=int, default=1000)
+    parser.add_argument(
+        "--n-trajectories", type=int, default=2000,
+        help="Trajectories per aircraft. Heavy-tailed phase durations "
+             "(mu_T < 4) reward large ensembles; see Appendix D of the "
+             "manuscript.",
+    )
     parser.add_argument(
         "--n-cycles", type=int, default=50,
         help="Cycles per trajectory. Each cycle yields one T, one S and "
              "one C episode.",
+    )
+    parser.add_argument(
+        "--band-sample", type=int, default=5000,
+        help="Episodes per phase used for the percentile band "
+             "(memory cap; episodes are i.i.d. so the first K are an "
+             "unbiased sample).",
+    )
+    parser.add_argument(
+        "--q-lo", type=float, default=5.0,
+        help="Lower percentile of the per-episode band (default 5).",
+    )
+    parser.add_argument(
+        "--q-hi", type=float, default=95.0,
+        help="Upper percentile of the per-episode band (default 95).",
     )
     parser.add_argument("--dt", type=float, default=1.0)
     parser.add_argument(
@@ -487,6 +534,8 @@ def main() -> None:
                 "max_lag": args.max_lag,
                 "max_samples_per_episode": max_samples,
                 "seed": args.seed,
+                "band": f"sample-percentile-{args.q_lo:g}-{args.q_hi:g}",
+                "band_sample": args.band_sample,
                 "msd_estimator": "ea",
             },
             config_paths={"aircraft": CONFIGS_DIR / f"{aircraft}.yaml"},
@@ -519,6 +568,9 @@ def main() -> None:
                 max_samples_per_episode=max_samples,
                 rng=rng,
                 logger=logger,
+                band_sample=args.band_sample,
+                q_lo=args.q_lo,
+                q_hi=args.q_hi,
             )
             if args.cache != "off":
                 save_dataset(

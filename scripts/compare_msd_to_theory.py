@@ -249,6 +249,14 @@ def plot_search(configs: dict[str, SoaringConfig],
         cfg = configs[ac]; sm = cfg.search_motion
         lags = per_phase[ac]["lags"]; msd = per_phase[ac]["msd_S"]
         m = (lags > 0) & np.isfinite(msd) & (msd > 0)
+        # Sample-percentile band (5--95%): direct percentiles of the
+        # per-episode squared search displacements at each lag.
+        blo = per_phase[ac].get("q05_S"); bhi = per_phase[ac].get("q95_S")
+        if blo is not None and bhi is not None:
+            mb = m & np.isfinite(blo) & np.isfinite(bhi) & (blo > 0)
+            ax.fill_between(lags[mb], blo[mb], bhi[mb],
+                            color=COLOR_SIM, alpha=0.18, lw=0,
+                            label="5–95% of episodes")
         ax.loglog(lags[m], msd[m], "o", ms=3, color=COLOR_SIM,
                   alpha=0.7, label="simulated")
         grid = np.geomspace(lags[m].min(), lags[m].max(), 200)
@@ -282,6 +290,14 @@ def plot_climb(configs: dict[str, SoaringConfig],
         cm = configs[ac].climb_motion
         lags = per_phase[ac]["lags"]; msd = per_phase[ac]["msd_C"]
         m = (lags > 0) & np.isfinite(msd) & (msd > 0)
+        # Sample-percentile band (5--95%): direct percentiles of the
+        # per-episode squared climb displacements at each lag.
+        blo = per_phase[ac].get("q05_C"); bhi = per_phase[ac].get("q95_C")
+        if blo is not None and bhi is not None:
+            mb = m & np.isfinite(blo) & np.isfinite(bhi) & (blo > 0)
+            ax.fill_between(lags[mb], blo[mb], bhi[mb],
+                            color=COLOR_SIM, alpha=0.18, lw=0,
+                            label="5–95% of episodes")
         ax.loglog(lags[m], msd[m], "o", ms=3, color=COLOR_SIM,
                   alpha=0.7, label="simulated")
         grid = np.geomspace(lags[m].min(), lags[m].max(), 400)
@@ -304,48 +320,91 @@ def plot_climb(configs: dict[str, SoaringConfig],
 
 
 def simulate_cycle_msd(cfg: SoaringConfig, n_cycles: int, n_traj: int,
-                       rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+                       rng: np.random.Generator) -> np.ndarray:
     """Simulate ``n_traj`` independent trajectories of exactly
-    ``n_cycles`` cycles and return ``(msd, sem)`` for ``N = 0, …,
-    n_cycles`` — the end-of-cycle ``⟨|X_N|²⟩`` averaged over the
-    ensemble together with its per-N standard error of the mean. No
-    time-to-cycle conversion is involved: this is the direct
-    cycle-counted quantity the closed-form MSD predicts.
+    ``n_cycles`` cycles and return the full matrix ``r2`` of shape
+    ``(n_traj, n_cycles + 1)`` with ``r2[m, N] = |X_N|^2`` of
+    trajectory ``m`` at the end of cycle ``N``. No time-to-cycle
+    conversion is involved.
 
-    The SEM is reported because, for the near-critical classes
-    (``mu_T < 4``: sailplanes and paragliders), the per-cycle squared
-    displacement is heavy-tailed and the estimator converges slowly.
+    The ensemble mean ``r2.mean(axis=0)`` is the cycle-counted MSD the
+    closed form predicts; direct percentiles of ``r2`` along axis 0
+    give the sample band. The full matrix is kept (float32) because,
+    for the near-critical classes (``mu_T < 4``: sailplanes and
+    paragliders), the per-cycle squared displacement is heavy-tailed
+    and both the spread and the sub-ensemble variability are of
+    interest.
     """
-    s1 = np.zeros(n_cycles + 1, dtype=float)
-    s2 = np.zeros(n_cycles + 1, dtype=float)
-    for _ in range(n_traj):
+    r2 = np.empty((n_traj, n_cycles + 1), dtype=np.float32)
+    for m in range(n_traj):
         traj = simulate_single(cfg, n_cycles=n_cycles, rng=rng)
-        r2 = (traj.positions ** 2).sum(axis=1)
-        s1 += r2
-        s2 += r2 * r2
-    mean = s1 / n_traj
-    var = s2 / n_traj - mean ** 2
-    var = np.where(np.isfinite(var) & (var > 0), var, 0.0)
-    sem = np.sqrt(var / n_traj)
-    return mean, sem
+        r2[m] = (traj.positions ** 2).sum(axis=1)
+    return r2
+
+
+def cycle_band(r2: np.ndarray, q_lo: float = 5.0,
+               q_hi: float = 95.0) -> tuple[np.ndarray, np.ndarray]:
+    """Direct ``q_lo``–``q_hi`` percentiles (default 5–95) of the
+    per-trajectory ``|X_N|^2`` at each ``N`` — the same sample whose
+    mean is the cycle-counted MSD. No bootstrap."""
+    lo, hi = np.percentile(r2, [q_lo, q_hi], axis=0)
+    return lo, hi
+
+
+def heff_subensemble_band(
+    r2: np.ndarray,
+    n_groups: int = 10,
+    win_factor: float = 2.0,
+    q_lo: float = 5.0,
+    q_hi: float = 95.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Sample-based variability band for the cycle-counted ``H_eff(N)``.
+
+    ``H_eff(N)`` is a functional of the ensemble-*mean* MSD, so a
+    per-trajectory percentile band is not defined for it. The
+    sample-based analogue, with no resampling involved, splits the
+    ``M`` trajectories into ``n_groups`` disjoint sub-ensembles,
+    computes the mean MSD and its local log-log slope per group, and
+    returns the ``q_lo``–``q_hi`` percentiles of the group curves at
+    each ``N``. The spread visualises the finite-sample variability of
+    the estimator at ensemble size ``M / n_groups``.
+
+    Returns ``(N_valid, lo, hi)`` with ``H_eff`` values (slope / 2).
+    """
+    M = r2.shape[0]
+    g = max(2, int(n_groups))
+    size = M // g
+    if size < 2:
+        raise ValueError(f"too few trajectories ({M}) for {g} groups")
+    n_arr = np.arange(r2.shape[1], dtype=float)
+    curves = []
+    for k in range(g):
+        mean_k = r2[k * size:(k + 1) * size].mean(axis=0)
+        Nv, slope = local_loglog_slope(n_arr, mean_k, win_factor=win_factor)
+        curves.append(0.5 * slope)
+    curves = np.vstack(curves)  # (g, n_valid) — same mask for all groups
+    lo = np.nanpercentile(curves, q_lo, axis=0)
+    hi = np.nanpercentile(curves, q_hi, axis=0)
+    return Nv, lo, hi
 
 
 def plot_cycles(configs: dict[str, SoaringConfig],
                 cycle_msd: dict[str, np.ndarray], output_path: Path,
                 aircrafts: list[str],
-                cycle_sem: dict[str, np.ndarray] | None = None) -> None:
+                cycle_bands: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+                band_label: str = "5–95% of trajectories") -> None:
     fig, axes = _setup_axes(aircrafts)
     for ax, ac, letter in zip(axes, aircrafts, PANEL_LETTERS):
         cfg = configs[ac]
         sq = cycle_msd[ac]
         N_arr = np.arange(len(sq))
         m = N_arr > 0
-        if cycle_sem is not None and ac in cycle_sem:
-            sem = cycle_sem[ac]
-            mb = m & np.isfinite(sem) & (sq - sem > 0)
-            ax.fill_between(N_arr[mb], sq[mb] - sem[mb], sq[mb] + sem[mb],
-                            color=COLOR_SIM, alpha=0.25, lw=0,
-                            label=r"$\pm1$ SEM")
+        if cycle_bands is not None and ac in cycle_bands:
+            blo, bhi = cycle_bands[ac]
+            mb = m & np.isfinite(blo) & np.isfinite(bhi) & (blo > 0)
+            ax.fill_between(N_arr[mb], blo[mb], bhi[mb],
+                            color=COLOR_SIM, alpha=0.18, lw=0,
+                            label=band_label)
         ax.loglog(N_arr[m], sq[m], "o", ms=4, color=COLOR_SIM,
                   alpha=0.8, label=r"simulated $\langle|\mathbf{X}_N|^2\rangle$")
         A, B, rho, mean_T = compute_AB(cfg)
@@ -371,7 +430,9 @@ def plot_cycles(configs: dict[str, SoaringConfig],
 
 def plot_Heff(configs: dict[str, SoaringConfig],
               cycle_msd: dict[str, np.ndarray], output_path: Path,
-              aircrafts: list[str], win_factor: float = 2.0) -> None:
+              aircrafts: list[str], win_factor: float = 2.0,
+              heff_bands: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] | None = None,
+              n_groups: int = 10) -> None:
     """1×N panel of the cycle-counted ``H_eff(N) = (1/2) d log
     ⟨|X_N|²⟩ / d log N``: the local log-log slope of the simulated
     cycle-counted MSD (no time→cycle conversion), compared to Eq. 26
@@ -381,6 +442,11 @@ def plot_Heff(configs: dict[str, SoaringConfig],
     ``log N``: at each N the line is fit over the points falling in
     ``[N / win_factor, N · win_factor]``. The default
     ``win_factor = 2`` gives a roughly half-decade window.
+
+    ``heff_bands`` (optional): per-aircraft ``(N, lo, hi)`` from
+    :func:`heff_subensemble_band` — the 5–95% spread of the same
+    estimator over disjoint sub-ensembles, visualising its
+    finite-sample variability (largest for the heavy-tailed classes).
     """
     fig, axes = _setup_axes(aircrafts)
     for ax, ac, letter in zip(axes, aircrafts, PANEL_LETTERS):
@@ -388,6 +454,11 @@ def plot_Heff(configs: dict[str, SoaringConfig],
         sq = cycle_msd[ac]
         N_arr = np.arange(len(sq), dtype=float)
         N_sim, slope = local_loglog_slope(N_arr, sq, win_factor=win_factor)
+        if heff_bands is not None and ac in heff_bands:
+            Nb, blo, bhi = heff_bands[ac]
+            ax.fill_between(Nb, blo, bhi, color=COLOR_SIM, alpha=0.18,
+                            lw=0,
+                            label=f"5–95% over {n_groups} sub-ensembles")
         ax.semilogx(N_sim, 0.5 * slope, "-", lw=1.6, color=COLOR_SIM,
                     label=rf"simulated (local slope, window $\times{win_factor:g}$)")
         N_grid = np.geomspace(max(1.0, N_sim.min()),
@@ -533,19 +604,36 @@ def main() -> None:
     parser.add_argument("--n-cycles", type=int, default=60,
                         help="Number of cycles per trajectory for the "
                              "cycle-counted MSD comparison.")
-    parser.add_argument("--n-traj-cycles", type=int, default=3000,
+    parser.add_argument("--n-traj-cycles", type=int, default=10000,
                         help="Trajectories for the cycle-counted MSD "
-                             "(default for all aircraft).")
+                             "(default for all aircraft). Heavy-tailed "
+                             "transition durations (mu_T < 4) make the "
+                             "estimator of Var(tau_T) converge slowly, "
+                             "so prefer large ensembles.")
     parser.add_argument(
         "--n-traj-cycles-by-aircraft", nargs="*", default=[],
         metavar="AIRCRAFT=N",
         help=(
             "Per-aircraft override of --n-traj-cycles, e.g. "
-            "`--n-traj-cycles-by-aircraft sailplanes=60000`. Useful "
-            "for sailplanes (mu_T=2.62 close to 2), whose Lomax "
-            "variance converges slowly and benefits from a much larger "
-            "sample. Aircraft not listed use --n-traj-cycles."
+            "`--n-traj-cycles-by-aircraft sailplanes=120000`. Required "
+            "in practice for sailplanes (mu_T=2.62 close to 2): the "
+            "estimator error decays only as M^{-(1-2/mu_T)} ~ M^-0.24, "
+            "so the recommended production value is sailplanes=120000. "
+            "Aircraft not listed use --n-traj-cycles."
         ),
+    )
+    parser.add_argument(
+        "--n-groups", type=int, default=10,
+        help="Disjoint sub-ensembles used for the 5-95%% variability "
+             "band of the cycle-counted H_eff(N).",
+    )
+    parser.add_argument(
+        "--q-lo", type=float, default=5.0,
+        help="Lower percentile of the sample bands (default 5).",
+    )
+    parser.add_argument(
+        "--q-hi", type=float, default=95.0,
+        help="Upper percentile of the sample bands (default 95).",
     )
     parser.add_argument("--seed-cycles", type=int, default=42,
                         help="RNG seed for the cycle-counted MSD.")
@@ -642,23 +730,33 @@ def main() -> None:
         + f" × {args.n_cycles} cycles)..."
     )
     cycle_msd: dict[str, np.ndarray] = {}
-    cycle_sem: dict[str, np.ndarray] = {}
+    cycle_bands: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    heff_bands: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     for i, ac in enumerate(args.aircraft):
         # Deterministic per-aircraft offset (avoid Python's randomised
         # str hash, which makes runs non-reproducible across processes).
         rng = np.random.default_rng(args.seed_cycles + i)
-        cycle_msd[ac], cycle_sem[ac] = simulate_cycle_msd(
+        r2 = simulate_cycle_msd(
             configs[ac], n_cycles=args.n_cycles,
             n_traj=n_traj_map[ac], rng=rng,
         )
+        cycle_msd[ac] = r2.mean(axis=0)
+        cycle_bands[ac] = cycle_band(r2, q_lo=args.q_lo, q_hi=args.q_hi)
+        heff_bands[ac] = heff_subensemble_band(
+            r2, n_groups=args.n_groups, win_factor=args.win_factor,
+            q_lo=args.q_lo, q_hi=args.q_hi,
+        )
+        del r2
         print(f"  {ac}: done")
     plot_cycles(configs, cycle_msd,
                 args.figures_dir / "compare_theory_msd_cycles.pdf",
-                list(args.aircraft), cycle_sem=cycle_sem)
+                list(args.aircraft), cycle_bands=cycle_bands,
+                band_label=f"{args.q_lo:g}–{args.q_hi:g}% of trajectories")
     plot_Heff(configs, cycle_msd,
               args.figures_dir / "compare_theory_Heff.pdf",
               list(args.aircraft),
-              win_factor=args.win_factor)
+              win_factor=args.win_factor,
+              heff_bands=heff_bands, n_groups=args.n_groups)
 
     # Pure-theory breakdown of Eqs. 21 / 23 / 26 vs N (no simulation).
     plot_theory_components(configs,

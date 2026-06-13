@@ -144,17 +144,26 @@ def _compute_curve(
     rng: np.random.Generator,
     logger: logging.Logger,
     prefix: str = "",
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return ``(H_array, msd_matrix)`` for one (aircraft, mode).
+    n_groups: int = 10,
+    q_lo: float = 5.0,
+    q_hi: float = 95.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return ``(H_array, msd_matrix, H_band)`` for one (aircraft, mode).
 
-    ``H_array`` has shape ``(len(sigma_grid),)``.
-    ``msd_matrix`` has shape ``(len(sigma_grid), n_steps-1)`` so the
-    plot script can later inspect the raw curves.
+    ``H_array`` has shape ``(len(sigma_grid),)`` (full-ensemble fit).
+    ``msd_matrix`` has shape ``(len(sigma_grid), n_steps-1)``.
+    ``H_band`` has shape ``(len(sigma_grid), 2)``: the ``q_lo``/``q_hi``
+    percentiles (default 5--95) of ``H_eff`` refit on ``n_groups``
+    disjoint sub-ensembles, i.e.\ the finite-sample spread of the
+    calibration curve at sub-ensemble size ``M / n_groups``.
     """
     n_steps = int(total_time / dt) + 1
     H_array = np.full(len(sigma_grid), np.nan)
     msd_matrix = np.full((len(sigma_grid), n_steps - 1), np.nan)
+    H_band = np.full((len(sigma_grid), 2), np.nan)
     lags = np.arange(1, n_steps) * dt
+    grp = max(2, int(n_groups))
+    gsize = max(1, n_trajectories // grp)
 
     t_total = 0.0
     for k, sigma in enumerate(sigma_grid):
@@ -174,6 +183,18 @@ def _compute_curve(
             h_str = f"{H_array[k]:.3f}"
         except ValueError as exc:
             h_str = f"NaN ({exc!s})"
+        # Sub-ensemble 5-95% band of the fitted H (no bootstrap).
+        if gsize >= 2:
+            hs = []
+            for j in range(grp):
+                sub = ens[j * gsize:(j + 1) * gsize]
+                try:
+                    hs.append(fit_hurst(lags, msd_ensemble(sub)[1:],
+                                        (fit_min, fit_max)).hurst)
+                except ValueError:
+                    pass
+            if len(hs) >= 2:
+                H_band[k] = np.percentile(hs, [q_lo, q_hi])
         t_cell = time.time() - t0
         t_total += t_cell
         msg = (
@@ -184,7 +205,7 @@ def _compute_curve(
         logger.info("%s", msg)
     print(f"{prefix}  total wall time ({mode}): {t_total/60:.2f} min", flush=True)
     logger.info("total wall time mode=%s: %.2f min", mode, t_total / 60)
-    return H_array, msd_matrix
+    return H_array, msd_matrix, H_band
 
 
 def _sigma_at_H(sigma_grid: np.ndarray, H_array: np.ndarray, H_target: float) -> float | None:
@@ -279,6 +300,7 @@ def _plot_overlay(
     fit_min: float,
     fit_max: float,
     output_path: Path,
+    n_groups: int = 10,
 ) -> None:
     """Overlay of all available modes for one aircraft."""
     fig, ax = plt.subplots(figsize=(7, 4.5), constrained_layout=True)
@@ -287,8 +309,15 @@ def _plot_overlay(
     for mode, res in results.items():
         sigma_grid = res["sigma_grid"]
         H_array = res["H_array"]
+        H_band = res.get("H_band")
         sigma_star = res["sigma_star"]
         c = colors.get(mode, "C2")
+        if H_band is not None and np.ndim(H_band) == 2 and H_band.shape[0] == len(sigma_grid):
+            good = np.isfinite(H_band[:, 0]) & np.isfinite(H_band[:, 1])
+            if good.any():
+                ax.fill_between(sigma_grid[good], H_band[good, 0], H_band[good, 1],
+                                color=c, alpha=0.18, lw=0,
+                                label=rf"{mode}-cycle: 5--95% over {max(2, int(n_groups))} sub-ensembles")
         ax.plot(sigma_grid, H_array, "o-", color=c, lw=1.5, ms=4,
                 label=rf"{mode}-cycle")
         if sigma_star is not None:
@@ -371,6 +400,8 @@ def _process_aircraft(
                 "fit_min": args.fit_min,
                 "fit_max": args.fit_max,
                 "seed": args.seed,
+                "n_groups": args.n_groups,
+                "band": "sample-percentile-5-95",
                 "msd_estimator": "ea",
             },
             config_paths={"aircraft": CONFIGS_DIR / f"{aircraft}.yaml"},
@@ -399,11 +430,12 @@ def _process_aircraft(
             arrays, _ = load_dataset(npz_path, manifest_path)
             H_array = arrays["H_array"]
             msd_matrix = arrays.get("msd_matrix")
+            H_band = arrays.get("H_band")
             sigma_grid_cached = arrays["sigma_grid"]
             if not np.allclose(sigma_grid_cached, sigma_grid):
                 sigma_grid = sigma_grid_cached
         else:
-            H_array, msd_matrix = _compute_curve(
+            H_array, msd_matrix, H_band = _compute_curve(
                 base, mode, sigma_grid,
                 n_trajectories=args.n_trajectories,
                 total_time=args.total_time,
@@ -413,6 +445,7 @@ def _process_aircraft(
                 rng=rng,
                 logger=logger,
                 prefix=prefix,
+                n_groups=args.n_groups,
             )
             if args.cache != "off":
                 save_dataset(
@@ -423,6 +456,7 @@ def _process_aircraft(
                         "sigma_grid": sigma_grid,
                         "H_array": H_array,
                         "msd_matrix": msd_matrix,
+                        "H_band": H_band,
                     },
                 )
                 print(f"{prefix}  [{mode}] saved data: {npz_path}", flush=True)
@@ -448,6 +482,7 @@ def _process_aircraft(
             "sigma_grid": sigma_grid,
             "H_array": H_array,
             "msd_matrix": msd_matrix,
+            "H_band": H_band,
             "sigma_star": sigma_star,
         }
 
@@ -461,6 +496,7 @@ def _process_aircraft(
             fit_min=args.fit_min,
             fit_max=args.fit_max,
             output_path=overlay_path,
+            n_groups=args.n_groups,
         )
         print(f"{prefix}  overlay saved: {overlay_path}", flush=True)
         logger.info("saved overlay: %s", overlay_path)
@@ -537,7 +573,12 @@ def main() -> None:
                         help="Number of σ_θ values in the 1-D grid.")
     parser.add_argument("--sigma-min", type=float, default=0.05)
     parser.add_argument("--sigma-max", type=float, default=1.5)
-    parser.add_argument("--n-trajectories", type=int, default=1000)
+    parser.add_argument(
+        "--n-trajectories", type=int, default=2000,
+        help="Flights per sigma_theta grid point. Heavy-tailed "
+             "transition durations (mu_T < 4 for paragliders and "
+             "sailplanes) reward large ensembles (see Appendix D).",
+    )
     parser.add_argument(
         "--total-time", type=float, default=15_000.0,
         help="Trajectory length (s). Must be ≥ fit_max so each trajectory "
@@ -557,6 +598,11 @@ def main() -> None:
              "fit_max so the EA-MSD has samples at the upper edge.",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--n-groups", type=int, default=10,
+        help="Disjoint sub-ensembles used for the 5-95%% sample band on "
+             "the H_eff(sigma_theta) calibration curve.",
+    )
     parser.add_argument("--figures-dir", type=Path, default=FIGURES_DIR)
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
     parser.add_argument("--logs-dir", type=Path, default=REPO_ROOT / "logs")

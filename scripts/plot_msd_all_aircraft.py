@@ -55,7 +55,7 @@ from soaring_ctrw.cache import (
 )
 from soaring_ctrw.calibration import calibration_path, load_calibrated_config
 from soaring_ctrw.model import SoaringConfig
-from soaring_ctrw.observables import msd_ensemble_ci
+from soaring_ctrw.observables import msd_ensemble_percentiles
 from soaring_ctrw.paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR
 from soaring_ctrw.simulation import simulate_ensemble
 
@@ -84,9 +84,15 @@ def _compute_msd(
     total_time: float,
     dt: float,
     seed: int,
-    n_boot: int = 1000,
+    q_lo: float = 5.0,
+    q_hi: float = 95.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Return ``(lags, msd, msd_lo, msd_hi)`` with a bootstrap 95% CI band."""
+    """Return ``(lags, msd, msd_lo, msd_hi)``.
+
+    ``msd_lo``/``msd_hi`` are the direct ``q_lo``--``q_hi`` percentiles
+    (default 5--95) of the per-flight squared displacements at each lag
+    — the same M samples averaged into the EA-MSD. No bootstrap.
+    """
     rng = np.random.default_rng(
         derived_seed(seed, config.name, SCRIPT_SLUG)
     )
@@ -94,10 +100,7 @@ def _compute_msd(
         config=config, n_trajectories=n_trajectories,
         total_time=total_time, dt=dt, rng=rng,
     )
-    boot_rng = np.random.default_rng(
-        derived_seed(seed, config.name, SCRIPT_SLUG + "_boot")
-    )
-    msd, lo, hi = msd_ensemble_ci(ens, n_boot=n_boot, ci=0.95, rng=boot_rng)
+    msd, lo, hi = msd_ensemble_percentiles(ens, q_lo=q_lo, q_hi=q_hi)
     lags = np.arange(len(msd)) * dt
     return lags, msd, lo, hi
 
@@ -185,7 +188,9 @@ def _plot_raw_with_slope(
     ``[fit_min, lag_max] = [10, 7000]`` s by default. The fitted slope
     and the corresponding effective Hurst exponent ``H = slope/2`` (with
     the standard error of the log-log regression) are reported in the
-    legend; a shaded band shows the bootstrap 95% CI of the MSD.
+    legend; the shaded band spans the 5th-95th percentile of the
+    per-flight squared displacements at each lag (sample spread, no
+    bootstrap).
     """
     fig, (ax_msd, ax_slope) = plt.subplots(
         2, 1, figsize=(8.0, 8.5), constrained_layout=True, sharex=True,
@@ -200,7 +205,7 @@ def _plot_raw_with_slope(
         lo = curves[aircraft].get("lo")
         hi = curves[aircraft].get("hi")
         m = (lags >= lag_min) & (lags <= lag_max) & np.isfinite(msd) & (msd > 0)
-        # --- Bootstrap 95% CI band (if available) --------------------
+        # --- 5-95% sample-percentile band (if available) -------------
         if lo is not None and hi is not None:
             mb = m & np.isfinite(lo) & np.isfinite(hi) & (lo > 0)
             ax_msd.fill_between(
@@ -224,7 +229,7 @@ def _plot_raw_with_slope(
                 "--", color=COLORS[aircraft], lw=1.4, alpha=0.95,
                 label=(
                     rf"  fit {LABELS[aircraft]}: slope $={slope:.3f}$  "
-                    rf"($H={slope/2:.3f}\pm{h_err:.3f}$)"
+                    rf"($H={slope/2:.3f}\pm{h_err:.1g}$)"
                 ),
             )
         # --- Local log-log slope -------------------------------------
@@ -320,7 +325,13 @@ def main() -> None:
         "--aircraft", nargs="+", default=list(AIRCRAFT_ORDER),
         choices=list(AIRCRAFT_ORDER),
     )
-    parser.add_argument("--n-trajectories", type=int, default=500)
+    parser.add_argument(
+        "--n-trajectories", type=int, default=2000,
+        help="Ensemble size M. Heavy-tailed transition durations "
+             "(mu_T < 4 for paragliders and sailplanes) make the MSD "
+             "amplitude converge slowly; prefer large M (see Appendix D "
+             "of the manuscript and plot_variance_convergence.py).",
+    )
     parser.add_argument(
         "--total-time", type=float, default=15_000.0,
         help="Trajectory length (s). Must be >= lag_max so each "
@@ -347,8 +358,12 @@ def main() -> None:
              "Upper edge = --lag-max.",
     )
     parser.add_argument(
-        "--n-boot", type=int, default=1000,
-        help="Bootstrap resamples for the 95%% CI band on the MSD.",
+        "--q-lo", type=float, default=5.0,
+        help="Lower percentile of the sample band on the MSD (default 5).",
+    )
+    parser.add_argument(
+        "--q-hi", type=float, default=95.0,
+        help="Upper percentile of the sample band on the MSD (default 95).",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
@@ -381,7 +396,7 @@ def main() -> None:
                 "total_time": args.total_time,
                 "dt": args.dt,
                 "seed": args.seed,
-                "n_boot": args.n_boot,
+                "band": f"sample-percentile-{args.q_lo:g}-{args.q_hi:g}",
                 "msd_estimator": "ea",
             },
             # Hash both the input YAML and the calibration YAML so the
@@ -409,7 +424,7 @@ def main() -> None:
             arrays, _ = load_dataset(npz_path, manifest_path)
             lags = arrays["lags"]
             msd = arrays["msd"]
-            # Older caches predate the bootstrap CI; fall back to None.
+            # Older caches predate the percentile band; fall back to None.
             msd_lo = arrays["msd_lo"] if "msd_lo" in arrays else None
             msd_hi = arrays["msd_hi"] if "msd_hi" in arrays else None
         else:
@@ -420,7 +435,7 @@ def main() -> None:
             t0 = time.time()
             lags, msd, msd_lo, msd_hi = _compute_msd(
                 config, args.n_trajectories, args.total_time, args.dt,
-                args.seed, n_boot=args.n_boot,
+                args.seed, q_lo=args.q_lo, q_hi=args.q_hi,
             )
             print(f"  done in {time.time() - t0:.1f} s")
             if args.cache != "off":

@@ -60,7 +60,7 @@ soaring-ctrw/
 │       ├── distributions.py   # Pareto, Lomax, Exponential, Mittag-Leffler
 │       ├── model.py           # SoaringConfig, SearchMotionConfig, ClimbMotionConfig, ...
 │       ├── simulation.py      # simulate_single, simulate_ensemble, interpolate_trajectory
-│       ├── observables.py     # time-averaged MSD (FFT), Hurst-exponent fit
+│       ├── observables.py     # ensemble-averaged MSD + 5-95% percentile band, Hurst-exponent fit
 │       ├── calibration.py     # read/write outputs/data/calibration/<aircraft>.yaml; apply_calibration
 │       ├── cache.py           # script-side NPZ + manifest cache for Monte-Carlo runs
 │       └── paths.py           # repo-relative output paths
@@ -74,7 +74,8 @@ soaring-ctrw/
 │   ├── compute_critical_time.py           # crossover time t_c = 2⟨T⟩/σ_θ² from calibrated σ_θ
 │   ├── plot_per_phase_msd.py              # 3-panel per-phase EA-MSD with log-log fits
 │   ├── plot_msd_all_aircraft.py           # MSD overlay + local-slope panel + rescaled MSD
-│   ├── compare_msd_to_theory.py           # simulated MSD vs paper Eqs. 10, 11, 23, 26
+│   ├── compare_msd_to_theory.py           # simulated MSD vs closed-form Eqs. (search/climb/cycles/Heff)
+│   ├── plot_variance_convergence.py       # App. D: convergence of v_xy²·Var(τ_T) vs ensemble size M
 │   ├── plot_trajectory.py                 # 2×2 sample-trajectory figure (uniform square axes)
 │   └── plot_phase_durations.py            # analytic CCDF panels (transition / search / climb)
 ├── tests/                       # pytest suite
@@ -161,7 +162,7 @@ every figure of the manuscript is:
 2. **Per-phase MSD** — 3-panel EA-MSD figure with log-log fits and
    per-aircraft MSD `.npz` files used by step 5 below:
    ```bash
-   python scripts/plot_per_phase_msd.py
+   python scripts/plot_per_phase_msd.py --n-trajectories 2000
    ```
 
 3. **σ_θ calibration** — 1-D scan against the empirical
@@ -169,7 +170,7 @@ every figure of the manuscript is:
    into the `sigma_theta` section of the calibration YAML:
    ```bash
    python scripts/estimate_sigma_theta.py \
-       --n-sigma 16 --n-trajectories 1000 --total-time 15000 \
+       --n-sigma 16 --n-trajectories 2000 --total-time 15000 \
        --fit-min 10 --fit-max 7000 --write
    ```
 
@@ -185,11 +186,28 @@ every figure of the manuscript is:
 5. **Final figures** — simulation MSDs vs theory, MSD overlay,
    trajectories, phase-duration CCDFs:
    ```bash
-   python scripts/plot_msd_all_aircraft.py
-   python scripts/compare_msd_to_theory.py
+   python scripts/plot_msd_all_aircraft.py --n-trajectories 2000
+   python scripts/compare_msd_to_theory.py \
+       --n-traj-cycles 10000 \
+       --n-traj-cycles-by-aircraft sailplanes=120000
    python scripts/plot_trajectory.py
    python scripts/plot_phase_durations.py
+   # Appendix-D diagnostic: convergence of the per-cycle variance estimator
+   python scripts/plot_variance_convergence.py
    ```
+
+   > **Heavy tails — use large ensembles.** The transition durations are
+   > Lomax with `μ_T = 3.93, 4.79, 2.62` (paragliders, hang gliders,
+   > sailplanes). For `μ_T < 4` the fourth moment diverges, so the
+   > estimator of the MSD amplitude `B = v_xy²·Var(τ_T) + Σ_S + Σ_C`
+   > has infinite variance and its statistical error decays only as
+   > `M^{-(1 - 2/μ_T)}` (≈ `M^{-0.24}` for sailplanes, `M^{-0.49}` for
+   > paragliders). The defaults above are the **minimum** recommended
+   > sizes; the sailplane cycle-counted MSD and `H_eff(N)` in particular
+   > need `sailplanes=120000` to be stable across seeds. The shaded
+   > bands in every mean-based figure are the direct **5–95th percentile
+   > of the sample** (no bootstrap), and `plot_variance_convergence.py`
+   > documents the convergence directly.
 
 The `configs/<aircraft>.yaml` files keep `angular.sigma_theta: null`; any
 script that needs `σ_θ` reads it from `outputs/data/calibration/<aircraft>.yaml`

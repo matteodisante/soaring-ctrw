@@ -22,8 +22,7 @@ import numpy as np
 __all__ = [
     "HurstFit",
     "msd_ensemble",
-    "msd_ensemble_sem",
-    "msd_ensemble_ci",
+    "msd_ensemble_percentiles",
     "fit_hurst",
 ]
 
@@ -116,50 +115,29 @@ def _squared_displacements(ensemble: np.ndarray) -> np.ndarray:
     return np.sum(disp * disp, axis=2)
 
 
-def msd_ensemble_sem(ensemble: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    r"""EA-MSD with its per-lag standard error of the mean (SEM).
-
-    Returns ``(msd, sem)`` where ``sem[k] = std_m(|r_m(k)-r_m(0)|^2) /
-    sqrt(M)`` (sample std, ``ddof=1``). The SEM is the Gaussian 1-sigma
-    error on the mean; for the heavy-tailed classes (``mu_T < 4``) it
-    understates the true spread and :func:`msd_ensemble_ci` should be
-    preferred.
-    """
-    sq = _squared_displacements(ensemble)
-    m = sq.shape[0]
-    msd = sq.mean(axis=0)
-    sem = sq.std(axis=0, ddof=1) / np.sqrt(m) if m > 1 else np.full(sq.shape[1], np.nan)
-    return msd, sem
-
-
-def msd_ensemble_ci(
+def msd_ensemble_percentiles(
     ensemble: np.ndarray,
-    n_boot: int = 1000,
-    ci: float = 0.95,
-    rng: np.random.Generator | None = None,
+    q_lo: float = 5.0,
+    q_hi: float = 95.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    r"""EA-MSD with a non-parametric bootstrap confidence interval.
+    r"""EA-MSD with the direct sample-percentile band.
 
-    Resamples the ``M`` trajectories with replacement ``n_boot`` times
-    and returns ``(msd, lo, hi)``, where ``lo``/``hi`` are the
-    ``(1±ci)/2`` quantiles of the bootstrap distribution of the EA-MSD
-    at each lag. Robust to the heavy-tailed per-trajectory squared
-    displacement of the near-critical classes (``mu_T < 4``), unlike the
-    Gaussian SEM.
+    Returns ``(msd, lo, hi)`` where ``lo``/``hi`` are the ``q_lo``-th /
+    ``q_hi``-th percentiles (default 5--95) of the per-trajectory squared
+    displacements ``|r_m(Δ)-r_m(0)|^2`` at each lag --- the same ``M``
+    samples whose mean is the EA-MSD. No resampling is involved: the
+    band is computed directly with ``np.percentile`` over the ensemble.
+
+    This band describes the spread of individual flights around the
+    mean, not the standard error of the mean. For the heavy-tailed
+    classes (``mu_T < 4``) the distribution is strongly skewed, so the
+    mean typically runs in the upper part of the band.
     """
-    if not (0.0 < ci < 1.0):
-        raise ValueError(f"ci must be in (0, 1), got {ci}")
+    if not (0.0 <= q_lo < q_hi <= 100.0):
+        raise ValueError(f"require 0 <= q_lo < q_hi <= 100, got ({q_lo}, {q_hi})")
     sq = _squared_displacements(ensemble)
-    m, n = sq.shape
     msd = sq.mean(axis=0)
-    if rng is None:
-        rng = np.random.default_rng()
-    boot = np.empty((n_boot, n), dtype=float)
-    for b in range(n_boot):
-        idx = rng.integers(0, m, size=m)
-        boot[b] = sq[idx].mean(axis=0)
-    lo = np.quantile(boot, (1.0 - ci) / 2.0, axis=0)
-    hi = np.quantile(boot, 1.0 - (1.0 - ci) / 2.0, axis=0)
+    lo, hi = np.percentile(sq, [q_lo, q_hi], axis=0)
     return msd, lo, hi
 
 
