@@ -55,7 +55,11 @@ from soaring_ctrw.cache import (
 )
 from soaring_ctrw.calibration import calibration_path, load_calibrated_config
 from soaring_ctrw.model import SoaringConfig
-from soaring_ctrw.observables import msd_ensemble_percentiles
+from soaring_ctrw.observables import (
+    fit_hurst,
+    msd_ensemble,
+    msd_ensemble_percentiles,
+)
 from soaring_ctrw.paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR
 from soaring_ctrw.simulation import simulate_ensemble
 
@@ -86,12 +90,23 @@ def _compute_msd(
     seed: int,
     q_lo: float = 5.0,
     q_hi: float = 95.0,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Return ``(lags, msd, msd_lo, msd_hi)``.
+    fit_min: float = 10.0,
+    fit_max: float = 7000.0,
+    fit_lag_spacing: str = "linear",
+    n_log_lags: int = 40,
+    n_groups: int = 10,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return ``(lags, msd, msd_lo, msd_hi, H_sub)``.
 
     ``msd_lo``/``msd_hi`` are the direct ``q_lo``--``q_hi`` percentiles
     (default 5--95) of the per-flight squared displacements at each lag
     — the same M samples averaged into the EA-MSD. No bootstrap.
+
+    ``H_sub`` are the Hurst exponents refit on ``n_groups`` disjoint
+    sub-ensembles over ``[fit_min, fit_max]``: ``std(H_sub)/sqrt(n)``
+    estimates the replica-level standard error of the full-ensemble
+    ``H`` — the honest uncertainty, an order of magnitude larger than
+    the OLS standard error of the (correlated-point) log-log fit.
     """
     rng = np.random.default_rng(
         derived_seed(seed, config.name, SCRIPT_SLUG)
@@ -102,7 +117,21 @@ def _compute_msd(
     )
     msd, lo, hi = msd_ensemble_percentiles(ens, q_lo=q_lo, q_hi=q_hi)
     lags = np.arange(len(msd)) * dt
-    return lags, msd, lo, hi
+
+    grp = max(2, int(n_groups))
+    gsize = n_trajectories // grp
+    H_sub = np.full(grp, np.nan)
+    if gsize >= 2:
+        for j in range(grp):
+            sub = ens[j * gsize:(j + 1) * gsize]
+            try:
+                H_sub[j] = fit_hurst(
+                    lags[1:], msd_ensemble(sub)[1:], (fit_min, fit_max),
+                    lag_spacing=fit_lag_spacing, n_log_lags=n_log_lags,
+                ).hurst
+            except ValueError:
+                pass
+    return lags, msd, lo, hi, H_sub
 
 
 def _local_slope(
@@ -133,40 +162,6 @@ def _local_slope(
     return L, slope
 
 
-def _fit_powerlaw(
-    lags: np.ndarray,
-    msd: np.ndarray,
-    fit_min: float,
-    fit_max: float,
-) -> tuple[float, float, float] | None:
-    """Linear fit of log MSD vs log lag over ``[fit_min, fit_max]``.
-
-    Returns ``(slope, intercept, slope_err)`` or ``None`` if fewer than
-    2 points are in range. ``slope_err`` is the OLS standard error of
-    the slope (``NaN`` for fewer than 3 points).
-    """
-    mask = (
-        (lags >= fit_min) & (lags <= fit_max)
-        & (msd > 0) & np.isfinite(msd)
-    )
-    if mask.sum() < 2:
-        return None
-    x = np.log(lags[mask])
-    y = np.log(msd[mask])
-    slope, intercept = np.polyfit(x, y, 1)
-    n = x.size
-    if n > 2:
-        resid = y - (slope * x + intercept)
-        sxx = float(np.sum((x - x.mean()) ** 2))
-        slope_err = (
-            float(np.sqrt(np.sum(resid ** 2) / (n - 2) / sxx))
-            if sxx > 0.0 else float("nan")
-        )
-    else:
-        slope_err = float("nan")
-    return float(slope), float(intercept), slope_err
-
-
 # ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
@@ -179,6 +174,8 @@ def _plot_raw_with_slope(
     lag_max: float,
     fit_min: float,
     output_path: Path,
+    fit_lag_spacing: str = "linear",
+    n_log_lags: int = 40,
 ) -> None:
     """Figure 1: MSD log-log (top, with per-aircraft power-law fits
     overlaid over ``[fit_min, lag_max]``) + local log-log slope
@@ -219,17 +216,35 @@ def _plot_raw_with_slope(
             label=LABELS[aircraft],
         )
         # --- Power-law fit over [fit_min, lag_max] --------------------
-        fit = _fit_powerlaw(lags, msd, fit_min, lag_max)
+        # The quoted uncertainty is the replica-level standard error
+        # (std over disjoint sub-ensembles / sqrt(n)); the OLS standard
+        # error of the correlated-point log-log fit underestimates it
+        # by roughly an order of magnitude and is not displayed.
+        try:
+            fit = fit_hurst(
+                lags[1:], msd[1:], (fit_min, lag_max),
+                lag_spacing=fit_lag_spacing, n_log_lags=n_log_lags,
+            )
+        except ValueError:
+            fit = None
         if fit is not None:
-            slope, intercept, slope_err = fit
             grid = np.geomspace(fit_min, lag_max, 80)
-            h_err = slope_err / 2.0
+            H_sub = curves[aircraft].get("H_sub")
+            if H_sub is not None:
+                H_sub = np.asarray(H_sub, dtype=float)
+                H_sub = H_sub[np.isfinite(H_sub)]
+            if H_sub is not None and H_sub.size >= 2:
+                h_err = float(H_sub.std(ddof=1) / np.sqrt(H_sub.size))
+                err_tag = "replica s.e."
+            else:
+                h_err = fit.hurst_err
+                err_tag = "OLS s.e. (underest.)"
             ax_msd.loglog(
-                grid, np.exp(intercept) * grid ** slope,
+                grid, np.exp(fit.intercept) * grid ** fit.slope,
                 "--", color=COLORS[aircraft], lw=1.4, alpha=0.95,
                 label=(
-                    rf"  fit {LABELS[aircraft]}: slope $={slope:.3f}$  "
-                    rf"($H={slope/2:.3f}\pm{h_err:.1g}$)"
+                    rf"  fit {LABELS[aircraft]}: slope $={fit.slope:.3f}$  "
+                    rf"($H={fit.hurst:.3f}\pm{h_err:.2g}$, {err_tag})"
                 ),
             )
         # --- Local log-log slope -------------------------------------
@@ -365,6 +380,33 @@ def main() -> None:
         "--q-hi", type=float, default=95.0,
         help="Upper percentile of the sample band on the MSD (default 95).",
     )
+    parser.add_argument(
+        "--fit-lag-spacing", choices=("linear", "log"), default="linear",
+        help="Lag-spacing convention of the log-log H fit: 'linear' "
+             "uses every lag of the uniform grid (manuscript "
+             "convention); 'log' subsamples --n-log-lags lags uniformly "
+             "in log(lag). Both fits are printed for comparison.",
+    )
+    parser.add_argument(
+        "--n-log-lags", type=int, default=40,
+        help="Number of log-spaced lags when --fit-lag-spacing=log.",
+    )
+    parser.add_argument(
+        "--n-groups", type=int, default=10,
+        help="Disjoint sub-ensembles for the replica-level standard "
+             "error of the fitted H (quoted in the legend).",
+    )
+    parser.add_argument(
+        "--write-hfit",
+        action="store_true",
+        default=False,
+        help="After computing the MSD, write the fitted H and its replica "
+             "s.e. to outputs/data/calibration/<aircraft>.yaml (section "
+             "'h_fit'). These values are then read by "
+             "scripts/write_paper_macros.py to generate LaTeX \\newcommand "
+             "definitions — so the paper never contains a hardcoded H_fit "
+             "uncertainty chosen by hand.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
     parser.add_argument("--figures-dir", type=Path, default=FIGURES_DIR)
@@ -398,6 +440,11 @@ def main() -> None:
                 "seed": args.seed,
                 "band": f"sample-percentile-{args.q_lo:g}-{args.q_hi:g}",
                 "msd_estimator": "ea",
+                "fit_window": [args.fit_min, args.lag_max],
+                "fit_lag_spacing": args.fit_lag_spacing,
+                "n_log_lags": args.n_log_lags,
+                "n_groups": args.n_groups,
+                "h_sub": True,
             },
             # Hash both the input YAML and the calibration YAML so the
             # cache is invalidated whenever either changes (in particular
@@ -427,15 +474,20 @@ def main() -> None:
             # Older caches predate the percentile band; fall back to None.
             msd_lo = arrays["msd_lo"] if "msd_lo" in arrays else None
             msd_hi = arrays["msd_hi"] if "msd_hi" in arrays else None
+            H_sub = arrays["H_sub"] if "H_sub" in arrays else None
         else:
             print(
                 f"  simulating {args.n_trajectories} traj "
                 f"× {args.total_time:.0f} s ..."
             )
             t0 = time.time()
-            lags, msd, msd_lo, msd_hi = _compute_msd(
+            lags, msd, msd_lo, msd_hi, H_sub = _compute_msd(
                 config, args.n_trajectories, args.total_time, args.dt,
                 args.seed, q_lo=args.q_lo, q_hi=args.q_hi,
+                fit_min=args.fit_min, fit_max=args.lag_max,
+                fit_lag_spacing=args.fit_lag_spacing,
+                n_log_lags=args.n_log_lags,
+                n_groups=args.n_groups,
             )
             print(f"  done in {time.time() - t0:.1f} s")
             if args.cache != "off":
@@ -446,13 +498,84 @@ def main() -> None:
                     arrays={
                         "lags": lags, "msd": msd,
                         "msd_lo": msd_lo, "msd_hi": msd_hi,
+                        "H_sub": H_sub,
                     },
                 )
                 print(f"  saved data: {npz_path}")
 
         curves[aircraft] = {
             "lags": lags, "msd": msd, "lo": msd_lo, "hi": msd_hi,
+            "H_sub": H_sub,
         }
+
+        # Convention-sensitivity printout: same cached MSD, two fits.
+        # The difference is a pure lag-weighting effect (declared
+        # systematic; see Sec. V.A of the manuscript).
+        try:
+            h_lin = fit_hurst(
+                lags[1:], msd[1:], (args.fit_min, args.lag_max),
+                lag_spacing="linear",
+            ).hurst
+            h_log = fit_hurst(
+                lags[1:], msd[1:], (args.fit_min, args.lag_max),
+                lag_spacing="log", n_log_lags=args.n_log_lags,
+            ).hurst
+            print(
+                f"  H_fit: linear-lags = {h_lin:.4f} | "
+                f"log-lags = {h_log:.4f} | diff = {h_lin - h_log:+.4f}"
+            )
+        except ValueError:
+            pass
+
+    # ------------------------------------------------------------------
+    # Optionally persist H_fit + replica SE to the per-aircraft
+    # calibration YAMLs so that write_paper_macros.py can generate
+    # paper_macros.tex without any hardcoded values.
+    # ------------------------------------------------------------------
+    if args.write_hfit:
+        from soaring_ctrw.calibration import write_calibration_section
+        print("\n=== Writing H_fit to calibration YAMLs (--write-hfit) ===")
+        for aircraft in args.aircraft:
+            if aircraft not in curves:
+                continue
+            lags_ac = curves[aircraft]["lags"]
+            msd_ac  = curves[aircraft]["msd"]
+            H_sub_ac = curves[aircraft].get("H_sub")
+            try:
+                fit_ac = fit_hurst(
+                    lags_ac[1:], msd_ac[1:], (args.fit_min, args.lag_max),
+                    lag_spacing=args.fit_lag_spacing,
+                    n_log_lags=args.n_log_lags,
+                )
+                h_val = float(fit_ac.hurst)
+            except ValueError:
+                h_val = float("nan")
+            # Replica SE from sub-ensembles (honest uncertainty)
+            if H_sub_ac is not None:
+                H_sub_arr = np.asarray(H_sub_ac, dtype=float)
+                H_sub_arr = H_sub_arr[np.isfinite(H_sub_arr)]
+                if H_sub_arr.size >= 2:
+                    replica_se = float(H_sub_arr.std(ddof=1) / np.sqrt(H_sub_arr.size))
+                    n_groups_eff = int(H_sub_arr.size)
+                else:
+                    replica_se = float("nan")
+                    n_groups_eff = 0
+            else:
+                replica_se = float("nan")
+                n_groups_eff = 0
+            payload = {
+                "source_script": "plot_msd_all_aircraft",
+                "h_fit": h_val,
+                "h_fit_replica_se": replica_se,
+                "n_groups": n_groups_eff,
+                "fit_lag_spacing": args.fit_lag_spacing,
+                "fit_window": [float(args.fit_min), float(args.lag_max)],
+            }
+            cal_path = write_calibration_section(aircraft, "h_fit", payload)
+            print(
+                f"  [{aircraft}]  H_fit = {h_val:.4f} ± {replica_se:.4f} "
+                f"(replica s.e., n_groups={n_groups_eff})  →  {cal_path}"
+            )
 
     raw_path = args.figures_dir / f"{SCRIPT_SLUG}_raw.pdf"
     _plot_raw_with_slope(
@@ -460,6 +583,8 @@ def main() -> None:
         lag_min=args.lag_min, lag_max=args.lag_max,
         fit_min=args.fit_min,
         output_path=raw_path,
+        fit_lag_spacing=args.fit_lag_spacing,
+        n_log_lags=args.n_log_lags,
     )
     print(f"\nSaved raw figure: {raw_path}")
 

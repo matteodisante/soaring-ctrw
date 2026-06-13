@@ -48,6 +48,20 @@ class HurstFit:
         Standard error of the fitted log-log slope from the ordinary
         least-squares regression (``NaN`` if fewer than 3 points). The
         Hurst-exponent standard error is ``slope_err / 2``.
+
+        .. warning::
+            This OLS standard error treats the fitted MSD points as
+            independent. Adjacent-lag MSD values of the same ensemble
+            are strongly correlated, so it underestimates the true
+            (replica-level) uncertainty of ``hurst`` by roughly an
+            order of magnitude. Use the spread of refits over disjoint
+            sub-ensembles (or independent seeds) for an honest error.
+    lag_spacing : str
+        Lag-spacing convention used for the fit: ``"linear"`` (every
+        available lag in range — weights large lags ``∝ Δ`` per unit
+        ``log Δ``) or ``"log"`` (lags subsampled uniformly in
+        ``log Δ``). The choice shifts ``hurst`` by up to ``~0.02`` on
+        crossover-shaped MSDs, so it must be reported.
     """
 
     hurst: float
@@ -56,6 +70,7 @@ class HurstFit:
     fit_range: tuple[float, float]
     n_points: int
     slope_err: float = float("nan")
+    lag_spacing: str = "linear"
 
     @property
     def hurst_err(self) -> float:
@@ -145,6 +160,8 @@ def fit_hurst(
     lags: np.ndarray,
     msd: np.ndarray,
     lag_range: tuple[float, float],
+    lag_spacing: str = "linear",
+    n_log_lags: int = 40,
 ) -> HurstFit:
     """Fit a power-law to the MSD over a specified lag range.
 
@@ -158,12 +175,32 @@ def fit_hurst(
     lag_range : tuple[float, float]
         Inclusive (lag_min, lag_max) over which to perform the log-log
         linear fit.
+    lag_spacing : {"linear", "log"}
+        Spacing of the lags entering the OLS regression.
+
+        - ``"linear"`` (default): every available lag in range. On a
+          uniform time grid this weights large lags ``∝ Δ`` per unit
+          ``log Δ``, pulling the fitted slope towards the large-lag
+          local slope.
+        - ``"log"``: the in-range lags are subsampled at
+          ``n_log_lags`` points uniformly spaced in ``log Δ`` — the
+          standard convention for MSD power laws.
+
+        On crossover-shaped MSDs the two conventions differ by up to
+        ``~0.02`` in ``H`` with a class-dependent sign, so the choice
+        is a declared systematic (see the manuscript, Sec. V.A).
+    n_log_lags : int
+        Number of log-spaced lags used when ``lag_spacing="log"``.
 
     Returns
     -------
     HurstFit
-        Fitted parameters and bookkeeping.
+        Fitted parameters and bookkeeping (including ``lag_spacing``).
     """
+    if lag_spacing not in ("linear", "log"):
+        raise ValueError(
+            f"lag_spacing must be 'linear' or 'log', got {lag_spacing!r}"
+        )
     lags = np.asarray(lags, dtype=float)
     msd = np.asarray(msd, dtype=float)
     if lags.shape != msd.shape:
@@ -180,6 +217,17 @@ def fit_hurst(
         )
 
     mask = (lags >= lag_min) & (lags <= lag_max) & (msd > 0)
+    if lag_spacing == "log" and mask.sum() >= 2:
+        # Subsample the in-range lags at ~n_log_lags points uniformly
+        # spaced in log(lag); duplicates collapse via np.unique, so on
+        # coarse grids the selection degrades gracefully.
+        valid = np.flatnonzero(mask)
+        in_lags = lags[valid]
+        targets = np.geomspace(in_lags[0], in_lags[-1], max(2, int(n_log_lags)))
+        sel = np.unique(np.searchsorted(in_lags, targets))
+        sel = sel[sel < len(valid)]
+        mask = np.zeros_like(mask)
+        mask[valid[sel]] = True
     if mask.sum() < 2:
         raise ValueError(
             f"Not enough points in lag range {lag_range!r} for a linear fit "
@@ -211,4 +259,5 @@ def fit_hurst(
         fit_range=(lag_min, lag_max),
         n_points=int(mask.sum()),
         slope_err=slope_err,
+        lag_spacing=lag_spacing,
     )

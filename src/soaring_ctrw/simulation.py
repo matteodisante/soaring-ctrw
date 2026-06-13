@@ -402,12 +402,16 @@ def simulate_single(
         theta0 = float(rng.uniform(0.0, 2.0 * np.pi))
     else:
         theta0 = float(config.angular.theta0)
-    eta = rng.normal(loc=0.0, scale=config.angular.sigma_theta, size=n_cycles)
+    # headings[0] = theta0 (initial heading, drawn isotropically above).
+    # Each subsequent heading is an independent angular increment from the
+    # previous one: theta_n = theta_{n-1} + eta_n,  eta_n ~ N(0, sigma_theta^2).
+    # We therefore need exactly n_cycles-1 increments (no unused samples).
+    n_increments = max(0, n_cycles - 1)
+    eta = rng.normal(loc=0.0, scale=config.angular.sigma_theta, size=n_increments)
     headings = np.empty(n_cycles)
     headings[0] = theta0
-    if n_cycles > 1:
-        headings[1:] = theta0 + np.cumsum(eta[1:])
-    # (eta[0] is unused: theta_0 is the prior, not theta_{-1} + eta_0.)
+    if n_increments > 0:
+        headings[1:] = theta0 + np.cumsum(eta)
 
     # --- Search episodes (active-budget local CTRW) -------------------
     if config.search_motion is not None:

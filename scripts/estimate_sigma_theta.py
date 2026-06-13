@@ -17,6 +17,20 @@ H_eff measurement, so the calibration condition H_eff(sigma_theta*) =
 The resulting H_eff(σ_θ) curve is interpolated to find the σ_θ* that
 satisfies H_eff(σ_θ*) = 0.88 (the universal empirical value).
 
+Uncertainty and conventions
+---------------------------
+- The log-log fit uses, by default, every lag of the uniform grid in
+  the window (``--fit-lag-spacing linear``, the convention quoted in
+  the manuscript). ``--fit-lag-spacing log`` subsamples ``--n-log-lags``
+  lags uniformly in log Δ instead; on crossover-shaped MSDs the two
+  conventions differ by up to ~0.02 in H (class-dependent sign), which
+  propagates to σ_θ*. The chosen convention is recorded in the
+  manifest and in the calibration YAML.
+- A replica-level uncertainty on σ_θ* is computed by re-extracting the
+  H = 0.88 crossing on ``--n-groups`` disjoint sub-ensembles: the YAML
+  stores the per-group values, their 5-95% range, and the standard
+  error of the full-ensemble σ_θ* (std of groups / sqrt(n_groups)).
+
 Two modes are produced independently:
 
   ``bare``  — only the transition phase carries displacement; search
@@ -147,8 +161,11 @@ def _compute_curve(
     n_groups: int = 10,
     q_lo: float = 5.0,
     q_hi: float = 95.0,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return ``(H_array, msd_matrix, H_band)`` for one (aircraft, mode).
+    fit_lag_spacing: str = "linear",
+    n_log_lags: int = 40,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return ``(H_array, msd_matrix, H_band, H_groups)`` for one
+    (aircraft, mode).
 
     ``H_array`` has shape ``(len(sigma_grid),)`` (full-ensemble fit).
     ``msd_matrix`` has shape ``(len(sigma_grid), n_steps-1)``.
@@ -156,13 +173,17 @@ def _compute_curve(
     percentiles (default 5--95) of ``H_eff`` refit on ``n_groups``
     disjoint sub-ensembles, i.e.\ the finite-sample spread of the
     calibration curve at sub-ensemble size ``M / n_groups``.
+    ``H_groups`` has shape ``(len(sigma_grid), n_groups)``: the
+    per-sub-ensemble refits themselves, used downstream to propagate a
+    replica-level uncertainty onto ``sigma_theta*``.
     """
     n_steps = int(total_time / dt) + 1
     H_array = np.full(len(sigma_grid), np.nan)
     msd_matrix = np.full((len(sigma_grid), n_steps - 1), np.nan)
     H_band = np.full((len(sigma_grid), 2), np.nan)
-    lags = np.arange(1, n_steps) * dt
     grp = max(2, int(n_groups))
+    H_groups = np.full((len(sigma_grid), grp), np.nan)
+    lags = np.arange(1, n_steps) * dt
     gsize = max(1, n_trajectories // grp)
 
     t_total = 0.0
@@ -179,22 +200,28 @@ def _compute_curve(
         msd = msd_ensemble(ens)[1:]
         msd_matrix[k] = msd
         try:
-            H_array[k] = fit_hurst(lags, msd, (fit_min, fit_max)).hurst
+            H_array[k] = fit_hurst(
+                lags, msd, (fit_min, fit_max),
+                lag_spacing=fit_lag_spacing, n_log_lags=n_log_lags,
+            ).hurst
             h_str = f"{H_array[k]:.3f}"
         except ValueError as exc:
             h_str = f"NaN ({exc!s})"
-        # Sub-ensemble 5-95% band of the fitted H (no bootstrap).
+        # Sub-ensemble refits: spread band + per-group values (used for
+        # the replica-level uncertainty on sigma_theta*). No bootstrap.
         if gsize >= 2:
-            hs = []
             for j in range(grp):
                 sub = ens[j * gsize:(j + 1) * gsize]
                 try:
-                    hs.append(fit_hurst(lags, msd_ensemble(sub)[1:],
-                                        (fit_min, fit_max)).hurst)
+                    H_groups[k, j] = fit_hurst(
+                        lags, msd_ensemble(sub)[1:], (fit_min, fit_max),
+                        lag_spacing=fit_lag_spacing, n_log_lags=n_log_lags,
+                    ).hurst
                 except ValueError:
                     pass
-            if len(hs) >= 2:
-                H_band[k] = np.percentile(hs, [q_lo, q_hi])
+            finite = np.isfinite(H_groups[k])
+            if finite.sum() >= 2:
+                H_band[k] = np.percentile(H_groups[k][finite], [q_lo, q_hi])
         t_cell = time.time() - t0
         t_total += t_cell
         msg = (
@@ -205,7 +232,7 @@ def _compute_curve(
         logger.info("%s", msg)
     print(f"{prefix}  total wall time ({mode}): {t_total/60:.2f} min", flush=True)
     logger.info("total wall time mode=%s: %.2f min", mode, t_total / 60)
-    return H_array, msd_matrix, H_band
+    return H_array, msd_matrix, H_band, H_groups
 
 
 def _sigma_at_H(sigma_grid: np.ndarray, H_array: np.ndarray, H_target: float) -> float | None:
@@ -323,8 +350,15 @@ def _plot_overlay(
         if sigma_star is not None:
             ax.plot([sigma_star], [H_EMPIRICAL], "s", mec=c, mfc="white",
                     ms=10, mew=1.5)
+            se = res.get("sigma_star_se")
+            label_star = rf"$\sigma_\theta^\star={sigma_star:.3f}$"
+            if se is not None:
+                label_star = (
+                    rf"$\sigma_\theta^\star={sigma_star:.3f}"
+                    rf"\pm{se:.3f}$"
+                )
             ax.annotate(
-                rf"$\sigma_\theta^\star={sigma_star:.3f}$",
+                label_star,
                 xy=(sigma_star, H_EMPIRICAL),
                 xytext=(6, -16 if mode == "bare" else 10),
                 textcoords="offset points",
@@ -403,6 +437,9 @@ def _process_aircraft(
                 "n_groups": args.n_groups,
                 "band": "sample-percentile-5-95",
                 "msd_estimator": "ea",
+                "fit_lag_spacing": args.fit_lag_spacing,
+                "n_log_lags": args.n_log_lags,
+                "h_groups": True,
             },
             config_paths={"aircraft": CONFIGS_DIR / f"{aircraft}.yaml"},
         )
@@ -431,11 +468,12 @@ def _process_aircraft(
             H_array = arrays["H_array"]
             msd_matrix = arrays.get("msd_matrix")
             H_band = arrays.get("H_band")
+            H_groups = arrays.get("H_groups")
             sigma_grid_cached = arrays["sigma_grid"]
             if not np.allclose(sigma_grid_cached, sigma_grid):
                 sigma_grid = sigma_grid_cached
         else:
-            H_array, msd_matrix, H_band = _compute_curve(
+            H_array, msd_matrix, H_band, H_groups = _compute_curve(
                 base, mode, sigma_grid,
                 n_trajectories=args.n_trajectories,
                 total_time=args.total_time,
@@ -446,6 +484,8 @@ def _process_aircraft(
                 logger=logger,
                 prefix=prefix,
                 n_groups=args.n_groups,
+                fit_lag_spacing=args.fit_lag_spacing,
+                n_log_lags=args.n_log_lags,
             )
             if args.cache != "off":
                 save_dataset(
@@ -457,12 +497,32 @@ def _process_aircraft(
                         "H_array": H_array,
                         "msd_matrix": msd_matrix,
                         "H_band": H_band,
+                        "H_groups": H_groups,
                     },
                 )
                 print(f"{prefix}  [{mode}] saved data: {npz_path}", flush=True)
                 logger.info("saved data: %s", npz_path)
 
         sigma_star = _sigma_at_H(sigma_grid, H_array, H_EMPIRICAL)
+
+        # Replica-level uncertainty: re-extract the crossing on each
+        # disjoint sub-ensemble curve. std/sqrt(n) estimates the
+        # standard error of the full-ensemble sigma_star.
+        sigma_star_groups: list[float] = []
+        if H_groups is not None and np.ndim(H_groups) == 2:
+            for j in range(H_groups.shape[1]):
+                s_j = _sigma_at_H(sigma_grid, H_groups[:, j], H_EMPIRICAL)
+                if s_j is not None:
+                    sigma_star_groups.append(float(s_j))
+        sigma_star_se: float | None = None
+        sigma_star_ci: list[float] | None = None
+        if len(sigma_star_groups) >= 2:
+            arr = np.asarray(sigma_star_groups)
+            sigma_star_se = float(arr.std(ddof=1) / np.sqrt(arr.size))
+            sigma_star_ci = [
+                float(np.percentile(arr, 5)), float(np.percentile(arr, 95)),
+            ]
+
         if sigma_star is None:
             print(
                 f"{prefix}  [{mode}] WARNING: H={H_EMPIRICAL} not reached in "
@@ -471,19 +531,30 @@ def _process_aircraft(
             )
             logger.warning("mode=%s sigma_star not found", mode)
         else:
+            se_str = (
+                f" ± {sigma_star_se:.4f} (replica s.e., "
+                f"{len(sigma_star_groups)} sub-ensembles; "
+                f"5–95% [{sigma_star_ci[0]:.4f}, {sigma_star_ci[1]:.4f}])"
+                if sigma_star_se is not None else ""
+            )
             print(
                 f"{prefix}  [{mode}] σ_θ* (H={H_EMPIRICAL}) = "
-                f"{sigma_star:.4f} rad",
+                f"{sigma_star:.4f}{se_str} rad",
                 flush=True,
             )
-            logger.info("mode=%s sigma_star=%.4f", mode, sigma_star)
+            logger.info("mode=%s sigma_star=%.4f se=%s",
+                        mode, sigma_star, sigma_star_se)
 
         results[mode] = {
             "sigma_grid": sigma_grid,
             "H_array": H_array,
             "msd_matrix": msd_matrix,
             "H_band": H_band,
+            "H_groups": H_groups,
             "sigma_star": sigma_star,
+            "sigma_star_se": sigma_star_se,
+            "sigma_star_ci": sigma_star_ci,
+            "sigma_star_groups": sigma_star_groups,
         }
 
     if results:
@@ -516,19 +587,30 @@ def _process_aircraft(
                 flush=True,
             )
         else:
+            primary_res = results[primary_mode]
             payload = {
                 "source_script": "estimate_sigma_theta",
                 "value": primary_value,
+                "value_se": primary_res.get("sigma_star_se"),
+                "value_ci_5_95": primary_res.get("sigma_star_ci"),
+                "value_groups": primary_res.get("sigma_star_groups"),
                 "mode": primary_mode,
                 "by_mode": by_mode,
+                "by_mode_se": {
+                    m: res.get("sigma_star_se")
+                    for m, res in results.items()
+                },
                 "H_target": float(H_EMPIRICAL),
                 "fit_window": [float(args.fit_min), float(args.fit_max)],
+                "fit_lag_spacing": str(args.fit_lag_spacing),
+                "n_log_lags": int(args.n_log_lags),
                 "sigma_grid": [float(args.sigma_min), float(args.sigma_max),
                                int(args.n_sigma)],
                 "n_trajectories": int(args.n_trajectories),
                 "total_time": float(args.total_time),
                 "dt": float(args.dt),
                 "seed": int(args.seed),
+                "n_subensembles": int(args.n_groups),
             }
             out = write_calibration_section(aircraft, "sigma_theta", payload)
             print(
@@ -601,7 +683,22 @@ def main() -> None:
     parser.add_argument(
         "--n-groups", type=int, default=10,
         help="Disjoint sub-ensembles used for the 5-95%% sample band on "
-             "the H_eff(sigma_theta) calibration curve.",
+             "the H_eff(sigma_theta) calibration curve and for the "
+             "replica-level standard error of sigma_theta*.",
+    )
+    parser.add_argument(
+        "--fit-lag-spacing", choices=("linear", "log"), default="linear",
+        help="Lag-spacing convention of the log-log H fit: 'linear' "
+             "uses every lag of the uniform grid in the window (the "
+             "manuscript's declared convention); 'log' subsamples "
+             "--n-log-lags lags uniformly in log(lag). The two differ "
+             "by up to ~0.02 in H on crossover-shaped MSDs, so the "
+             "choice is recorded in the cache manifest and in the "
+             "calibration YAML.",
+    )
+    parser.add_argument(
+        "--n-log-lags", type=int, default=40,
+        help="Number of log-spaced lags when --fit-lag-spacing=log.",
     )
     parser.add_argument("--figures-dir", type=Path, default=FIGURES_DIR)
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)

@@ -41,13 +41,27 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.special import erfcx, gamma as gamma_fn
 
 
 from soaring_ctrw.calibration import load_calibrated_config, write_calibration_section
 from soaring_ctrw.model import SoaringConfig
 from soaring_ctrw.paths import CONFIGS_DIR, DATA_DIR, FIGURES_DIR
 from soaring_ctrw.simulation import simulate_single
+from soaring_ctrw.theory import (
+    G_N,
+    G_N_prime,
+    Heff_theory_N,
+    climb_msd_exact,
+    climb_msd_theory,
+    compute_AB,
+    compute_Sigma_C,
+    compute_Sigma_S,
+    lomax_alpha_moment,
+    lomax_mean,
+    lomax_var,
+    search_msd_long,
+    search_msd_short,
+)
 
 AIRCRAFT_ORDER = ("paragliders", "hang_gliders", "sailplanes")
 AIRCRAFT_LABELS = {
@@ -61,136 +75,11 @@ COLOR_THY = "tab:red"
 
 
 # ---------------------------------------------------------------------------
-# Analytical helpers (paper_prl.tex equation numbers in comments)
+# Analytical helpers
 # ---------------------------------------------------------------------------
-
-
-def lomax_mean(mu: float, tau_0: float) -> float:
-    return tau_0 / (mu - 1.0)
-
-
-def lomax_var(mu: float, tau_0: float) -> float:
-    """Var of Lomax (finite for mu > 2)."""
-    if mu <= 2:
-        return float("inf")
-    return mu * tau_0 ** 2 / ((mu - 1.0) ** 2 * (mu - 2.0))
-
-
-def lomax_alpha_moment(alpha: float, mu: float, tau_0: float) -> float:
-    """E[tau^alpha] for Lomax with parameters (mu, tau_0). Finite for mu > alpha."""
-    return tau_0 ** alpha * gamma_fn(alpha + 1) * gamma_fn(mu - alpha) / gamma_fn(mu)
-
-
-# --- Eq. 10: conditional search MSD (asymptotic branches) ----------------
-
-def search_msd_short(lags: np.ndarray, u_S: float) -> np.ndarray:
-    """Short-lag ballistic branch of Eq. 10: u_S^2 Δ^2."""
-    return u_S ** 2 * lags ** 2
-
-
-def search_msd_long(lags: np.ndarray, alpha_S: float, tau_b_S: float,
-                    tau_turn_S: float, u_S: float) -> np.ndarray:
-    """Long-lag subdiffusive branch of Eq. 10."""
-    return (
-        2.0 * u_S ** 2 * tau_b_S ** 2
-        / (tau_turn_S ** alpha_S * gamma_fn(1.0 + alpha_S))
-        * lags ** alpha_S
-    )
-
-
-# --- Eq. 11: climb MSD ----------------------------------------------------
-
-def climb_msd_theory(lags: np.ndarray, r0: float, T_turn_mean: float,
-                     T_turn_std: float, v_drift: float) -> np.ndarray:
-    omega_bar = 2.0 * np.pi / T_turn_mean
-    sigma_omega = omega_bar * T_turn_std / T_turn_mean
-    return (
-        2.0 * r0 ** 2
-        * (1.0 - np.exp(-0.5 * sigma_omega ** 2 * lags ** 2)
-                * np.cos(omega_bar * lags))
-        + v_drift ** 2 * lags ** 2
-    )
-
-
-# --- Eq. 21 / 23 / 26: full MSD and H_eff ---------------------------------
-
-def G_N(N: np.ndarray, rho: float) -> np.ndarray:
-    """Eq. 21 of the paper, evaluated at continuous N."""
-    return N * (1.0 + rho) / (1.0 - rho) - 2.0 * rho * (1.0 - rho ** N) / (1.0 - rho) ** 2
-
-
-def G_N_prime(N: np.ndarray, rho: float) -> np.ndarray:
-    """d G_N / dN, treating N as continuous (used by Eq. 26)."""
-    return (1.0 + rho) / (1.0 - rho) + 2.0 * rho ** (N + 1.0) * np.log(rho) / (1.0 - rho) ** 2
-
-
-def compute_Sigma_S(cfg: SoaringConfig) -> float:
-    """Per-cycle search displacement variance, Eq. 36.
-
-    Uses T_phys^S = tau_S^n (Lomax) — the new physical-duration
-    stopping rule — so ⟨(T_phys^S)^alpha_S⟩ is the Lomax alpha-moment.
-    """
-    sm = cfg.search_motion
-    if sm is None:
-        return 0.0
-    mu_S = cfg.search.params["mu"]
-    tau_0_S = cfg.search.params["tau_0"]
-    T_phys_alpha = lomax_alpha_moment(sm.alpha_S, mu_S, tau_0_S)
-    return (
-        2.0 * sm.u_S ** 2 * sm.tau_b_S ** 2
-        / (sm.tau_turn_S ** sm.alpha_S * gamma_fn(1.0 + sm.alpha_S))
-        * T_phys_alpha
-    )
-
-
-def compute_Sigma_C(cfg: SoaringConfig) -> float:
-    """Per-cycle climb displacement variance, Eq. 37 (exact form).
-
-    Computes ``Re<exp(i omega tau)>`` exactly with omega = omega_bar +
-    delta_omega, delta_omega ~ N(0, sigma_omega^2) and tau ~ Exp(mu_C)
-    independent, via the scaled complementary error function for
-    complex arguments (Faddeeva). The drift term uses the exact
-    exponential second moment <tau^2> = 2 mu_C^2.
-    """
-    cm = cfg.climb_motion
-    if cm is None:
-        return 0.0
-    mu_C = cfg.climb.params["tau_mean"]
-    omega_bar = 2.0 * np.pi / cm.T_turn_mean
-    sigma_omega = omega_bar * cm.T_turn_std / cm.T_turn_mean
-    if sigma_omega == 0.0:
-        Re_phi = 1.0 / (1.0 + (omega_bar * mu_C) ** 2)
-    else:
-        z = (1.0 / mu_C - 1j * omega_bar) / (sigma_omega * np.sqrt(2.0))
-        I = np.sqrt(np.pi / 2.0) / (mu_C * sigma_omega) * erfcx(z)
-        Re_phi = float(np.real(I))
-    return 2.0 * cm.r0 ** 2 * (1.0 - Re_phi) + 2.0 * cm.v_drift ** 2 * mu_C ** 2
-
-
-def compute_AB(cfg: SoaringConfig) -> tuple[float, float, float, float]:
-    """Return ``(A, B, rho, mean_T)`` of Eq. 23."""
-    v_xy = cfg.v_xy
-    mu_T = cfg.transition.params["mu"]
-    tau_0_T = cfg.transition.params["tau_0"]
-    mean_T_phase = lomax_mean(mu_T, tau_0_T)
-    var_T_phase = lomax_var(mu_T, tau_0_T)
-    mean_S_phase = lomax_mean(cfg.search.params["mu"], cfg.search.params["tau_0"])
-    mean_C_phase = cfg.climb.params["tau_mean"]
-    A = (v_xy * mean_T_phase) ** 2
-    B = v_xy ** 2 * var_T_phase + compute_Sigma_S(cfg) + compute_Sigma_C(cfg)
-    rho = float(np.exp(-cfg.angular.sigma_theta ** 2 / 2.0))
-    return A, B, rho, mean_T_phase + mean_S_phase + mean_C_phase
-
-
-def Heff_theory_N(N: np.ndarray, cfg: SoaringConfig) -> np.ndarray:
-    """Eq. 26 evaluated at cycle count ``N`` (returns ``H_eff``, not
-    ``2*H_eff``)."""
-    A, B, rho, _ = compute_AB(cfg)
-    GN = G_N(N, rho)
-    GpN = G_N_prime(N, rho)
-    s_G = N * GpN / GN
-    w = A * GN / (A * GN + B * N)
-    return 0.5 * (1.0 + w * (s_G - 1.0))
+# All closed-form expressions live in ``soaring_ctrw.theory`` (single
+# source of truth, unit-tested in ``tests/test_theory.py``) and are
+# re-exported here so external users of this script keep working.
 
 
 def local_loglog_slope(x: np.ndarray, y: np.ndarray,
@@ -304,7 +193,15 @@ def plot_climb(configs: dict[str, SoaringConfig],
         theory = climb_msd_theory(grid, cm.r0, cm.T_turn_mean,
                                   cm.T_turn_std, cm.v_drift)
         ax.loglog(grid, theory, "-", lw=1.8, color=COLOR_THY,
-                  label="Eq. 11 (theory)")
+                  label="Eq. 11 (closed form)")
+        # Reference: exact numerical average over the clipped-Gaussian
+        # turn period actually sampled by the simulator. Quantifies the
+        # accuracy of the first-order T->omega expansion of Eq. 11,
+        # whose error peaks around the turn lag (Appendix D).
+        exact = climb_msd_exact(grid, cm.r0, cm.T_turn_mean,
+                                cm.T_turn_std, cm.v_drift)
+        ax.loglog(grid, exact, ":", lw=1.7, color="0.15",
+                  label="period-averaged (exact)")
         ax.axhline(2.0 * cm.r0 ** 2, color="0.5", ls=":", lw=0.8,
                     label=rf"$2 r_0^2 = {2*cm.r0**2:.0f}\,\mathrm{{m}}^2$")
         ax.set_xlabel(r"$\Delta$  (s)")
@@ -329,13 +226,14 @@ def simulate_cycle_msd(cfg: SoaringConfig, n_cycles: int, n_traj: int,
 
     The ensemble mean ``r2.mean(axis=0)`` is the cycle-counted MSD the
     closed form predicts; direct percentiles of ``r2`` along axis 0
-    give the sample band. The full matrix is kept (float32) because,
+    give the sample band. The full matrix is kept because,
     for the near-critical classes (``mu_T < 4``: sailplanes and
     paragliders), the per-cycle squared displacement is heavy-tailed
     and both the spread and the sub-ensemble variability are of
-    interest.
+    interest. Stored in ``float64``: the heavy-tailed ``|X_N|^2``
+    reach ``~1e12 m^2`` and the running mean must not lose precision.
     """
-    r2 = np.empty((n_traj, n_cycles + 1), dtype=np.float32)
+    r2 = np.empty((n_traj, n_cycles + 1), dtype=np.float64)
     for m in range(n_traj):
         traj = simulate_single(cfg, n_cycles=n_cycles, rng=rng)
         r2[m] = (traj.positions ** 2).sum(axis=1)

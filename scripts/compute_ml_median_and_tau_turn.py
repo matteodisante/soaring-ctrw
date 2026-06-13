@@ -25,6 +25,7 @@ Requires ``pymittagleffler``.
 from __future__ import annotations
 
 import argparse
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -132,10 +133,20 @@ def main() -> None:
         omega = args.omega[i] if args.omega is not None else omega_cfg
         m = median_mittag_leffler(alpha)
         tt = tau_turn(Omega_S=omega, alpha_S=alpha)
+        rel_diff = abs(tt - tau_cfg) / max(abs(tau_cfg), 1e-12)
+        mismatch_flag = "  *** MISMATCH" if rel_diff > 0.05 else ""
         print(
             f"{aircraft:<14} {alpha:>8.4f} {m:>10.6f} "
-            f"{omega:>10.4f} {tt:>12.4f} {tau_cfg:>10.4f}"
+            f"{omega:>10.4f} {tt:>12.4f} {tau_cfg:>10.4f}{mismatch_flag}"
         )
+        if rel_diff > 0.05:
+            warnings.warn(
+                f"{aircraft}: calibrated tau_turn_S ({tt:.4f} s) differs from "
+                f"YAML value ({tau_cfg:.4f} s) by {100 * rel_diff:.1f}% "
+                f"(threshold 5%). Re-run estimate_sigma_theta.py or update "
+                f"the YAML.",
+                stacklevel=2,
+            )
         if args.write:
             payload = {
                 "source_script": "compute_ml_median_and_tau_turn",
