@@ -23,6 +23,7 @@ the contents are always read from disk.
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 
 PACKAGE = "soaring_ctrw"
@@ -178,7 +179,7 @@ Module reference
 Command-line interface
 ----------------------
 
-.. program-output:: python {repo_root}/scripts/{name}.py --help
+.. program-output:: {python} {repo_root}/scripts/{name}.py --help
 """
 
 
@@ -200,6 +201,7 @@ def _write_script_pages(
             name=name,
             title_underline="=" * len(title),
             repo_root=repo_root.as_posix(),
+            python=Path(sys.executable).as_posix(),
         )
         (pages_dir / f"{name}.rst").write_text(page, encoding="utf-8")
 

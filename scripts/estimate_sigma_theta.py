@@ -171,7 +171,7 @@ def _compute_curve(
     ``msd_matrix`` has shape ``(len(sigma_grid), n_steps-1)``.
     ``H_band`` has shape ``(len(sigma_grid), 2)``: the ``q_lo``/``q_hi``
     percentiles (default 5--95) of ``H_eff`` refit on ``n_groups``
-    disjoint sub-ensembles, i.e.\ the finite-sample spread of the
+    disjoint sub-ensembles, i.e. the finite-sample spread of the
     calibration curve at sub-ensemble size ``M / n_groups``.
     ``H_groups`` has shape ``(len(sigma_grid), n_groups)``: the
     per-sub-ensemble refits themselves, used downstream to propagate a

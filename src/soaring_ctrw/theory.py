@@ -4,26 +4,39 @@ Single source of truth for every analytical formula used by the
 comparison scripts and by the test suite. Equation labels refer to the
 companion manuscript (Di Sante 2026, ``soaring_ctrw.tex``):
 
-================  ========================================================
-Function          Manuscript equation
-================  ========================================================
-``lomax_mean``    Lomax mean ``tau_0 / (mu - 1)`` (after Eq. ``eq:lomax``)
-``lomax_var``     Lomax variance (finite for ``mu > 2``)
-``lomax_alpha_moment``  fractional moment ``<tau^alpha>`` (Appendix A)
-``search_msd_short/long``  Eq. ``eq:msd-search`` asymptotic branches
-``climb_msd_theory``       Eq. ``eq:msd-climb`` (first-order T→omega)
-``climb_msd_exact``        numerical average over the *clipped-Gaussian*
-                           turn period actually sampled by the simulator
-                           (no first-order expansion; Appendix D)
-``G_N``           Eq. ``eq:GN`` / ``eq:GN-closed``
-``G_N_prime``     ``dG_N/dN`` (used by Eq. ``eq:Heff-convex``)
-``compute_Sigma_S``  Eq. ``eq:SigmaS``
-``compute_Sigma_C``  Eq. ``eq:SigmaC`` — evaluated in the *exact*
-                     Faddeeva form (the manuscript's plateau formula is
-                     its ``O(10^-3)`` approximation)
-``compute_AB``    amplitudes ``A``, ``B`` of Eq. ``eq:msd-closed``
-``Heff_theory_N`` Eq. ``eq:Heff-convex``
-================  ========================================================
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Function
+     - Manuscript equation
+   * - ``lomax_mean``
+     - Lomax mean ``tau_0 / (mu - 1)`` (after Eq. ``eq:lomax``)
+   * - ``lomax_var``
+     - Lomax variance (finite for ``mu > 2``)
+   * - ``lomax_alpha_moment``
+     - fractional moment ``<tau^alpha>`` (Appendix A)
+   * - ``search_msd_short`` / ``search_msd_long``
+     - Eq. ``eq:msd-search`` asymptotic branches
+   * - ``climb_msd_theory``
+     - Eq. ``eq:msd-climb`` (first-order T→omega)
+   * - ``climb_msd_exact``
+     - numerical average over the *clipped-Gaussian* turn period
+       actually sampled by the simulator (no first-order expansion;
+       Appendix D)
+   * - ``G_N``
+     - Eq. ``eq:GN`` / ``eq:GN-closed``
+   * - ``G_N_prime``
+     - ``dG_N/dN`` (used by Eq. ``eq:Heff-convex``)
+   * - ``compute_Sigma_S``
+     - Eq. ``eq:SigmaS``
+   * - ``compute_Sigma_C``
+     - Eq. ``eq:SigmaC`` — evaluated in the *exact* Faddeeva form (the
+       manuscript's plateau formula is its ``O(10^-3)`` approximation)
+   * - ``compute_AB``
+     - amplitudes ``A``, ``B`` of Eq. ``eq:msd-closed``
+   * - ``Heff_theory_N``
+     - Eq. ``eq:Heff-convex``
 """
 
 from __future__ import annotations

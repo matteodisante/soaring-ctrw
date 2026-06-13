@@ -13,6 +13,10 @@ from the **scripts** that orchestrate it. Conceptually the library is layered:
   trajectories.
 - **Analysis** — :mod:`~soaring_ctrw.observables` computes the MSD and Hurst
   exponent from trajectories.
+- **Theory** — :mod:`~soaring_ctrw.theory` is the single source of truth for
+  every analytical closed-form expression (Lomax moments, search/climb MSD,
+  the ``G_N`` kernel, ``Sigma_S``/``Sigma_C`` and the effective exponent);
+  it is consumed by :mod:`compare_msd_to_theory` and by the test suite.
 - **Bridges** — :mod:`~soaring_ctrw.calibration` reads/writes the per-aircraft
   calibration YAML and injects the calibrated ``sigma_theta`` into a config;
   :mod:`~soaring_ctrw.cache` provides manifest-based NPZ caching for the
