@@ -117,6 +117,51 @@ def build_macros(aircraft_list: list[str]) -> list[tuple[str, str, str]]:
             f"{aircraft}: H_fit replica s.e.",
         ))
 
+        # ---- critical time t_c and memory length n_c ---------------------
+        crit_sec = cal.get("critical_time", {})
+        tc_val = crit_sec.get("t_c", None)
+        nc_val = crit_sec.get("n_c", None)
+
+        rows.append((
+            f"Tc{suf}",
+            _safe(tc_val, ".0f"),
+            f"{aircraft}: crossover time t_c (s, integer)",
+        ))
+        rows.append((
+            f"Nc{suf}",
+            _safe(nc_val, ".1f"),
+            f"{aircraft}: directional-memory length n_c (cycles)",
+        ))
+        # Kilo variants for compact display (e.g. "4.9 x 10^3 s")
+        try:
+            import math
+            tc_kilo = float(tc_val) / 1000.0
+            tc_kilo_str = _safe(tc_kilo, ".1f") if math.isfinite(tc_kilo) else "NaN"
+        except (TypeError, ValueError):
+            tc_kilo_str = "NaN"
+        rows.append((
+            f"Tc{suf}Kilo",
+            tc_kilo_str,
+            f"{aircraft}: t_c / 10^3 s (one decimal place)",
+        ))
+
+        # ---- bare-cycle sigma_theta* -------------------------------------
+        by_mode = sigma_sec.get("by_mode", {})
+        bare_val = by_mode.get("bare", None)
+        by_mode_se = sigma_sec.get("by_mode_se", {})
+        bare_se = by_mode_se.get("bare", None)
+
+        rows.append((
+            f"SigmaStarBare{suf}",
+            _safe(bare_val, ".3f"),
+            f"{aircraft}: bare-cycle calibrated sigma_theta* (rad)",
+        ))
+        rows.append((
+            f"SigmaStarBare{suf}SE",
+            _safe(bare_se, ".3f"),
+            f"{aircraft}: bare-cycle sigma_theta* replica s.e. (rad)",
+        ))
+
     # ---- Cross-class summary: max replica SE (used in equation display)
     h_se_vals: list[float] = []
     for aircraft in aircraft_list:
