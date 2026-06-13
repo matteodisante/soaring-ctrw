@@ -155,7 +155,7 @@ def plot_search(configs: dict[str, SoaringConfig],
                   "-", lw=1.8, color=COLOR_THY,
                   label=r"Eq. 10 (short): $u_S^2\,\Delta^2$")
         ax.loglog(sub_grid, search_msd_long(sub_grid, sm.alpha_S, sm.tau_b_S,
-                                              sm.tau_turn_S, sm.u_S),
+                                              sm.tau_turn_S, sm.u_S, sm.Omega_S),
                   "--", lw=1.8, color=COLOR_THY,
                   label=rf"Eq. 10 (long): $\propto\Delta^{{\alpha_S={sm.alpha_S}}}$")
         ax.axvline(sm.tau_b_S, color="0.5", ls=":", lw=0.8)

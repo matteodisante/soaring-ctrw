@@ -16,8 +16,12 @@ companion manuscript (Di Sante 2026, ``soaring_ctrw.tex``):
      - Lomax variance (finite for ``mu > 2``)
    * - ``lomax_alpha_moment``
      - fractional moment ``<tau^alpha>`` (Appendix A)
+   * - ``ml_cos_mean`` / ``search_persistence_factor``
+     - directional-persistence factor ``1/(1-lambda)``,
+       ``lambda = <cos(Omega_S tau_turn)>`` (Appendix B)
    * - ``search_msd_short`` / ``search_msd_long``
-     - Eq. ``eq:msd-search`` asymptotic branches
+     - Eq. ``eq:msd-search`` asymptotic branches (long branch carries the
+       persistence factor)
    * - ``climb_msd_theory``
      - Eq. ``eq:msd-climb`` (first-order T→omega)
    * - ``climb_msd_exact``
@@ -51,6 +55,8 @@ __all__ = [
     "lomax_mean",
     "lomax_var",
     "lomax_alpha_moment",
+    "ml_cos_mean",
+    "search_persistence_factor",
     "search_msd_short",
     "search_msd_long",
     "climb_msd_theory",
@@ -94,6 +100,42 @@ def lomax_alpha_moment(alpha: float, mu: float, tau_0: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Appendix B — directional-persistence factor of the search-phase prefactor
+# ---------------------------------------------------------------------------
+
+
+def ml_cos_mean(omega: float, tau_turn_S: float, alpha_S: float) -> float:
+    """``lambda = <cos(omega tau_turn)>`` for a Pillai--Mittag-Leffler turning
+    time (survival ``E_alpha[-(t/tau_turn)^alpha]``).
+
+    Closed form from the Mittag-Leffler characteristic function
+    ``phi(omega) = 1 / (1 + (-i omega tau_turn)^alpha)`` (analytic
+    continuation ``q -> -i omega`` of the density Laplace transform);
+    ``lambda`` is its real part. Verified against a direct
+    Fulger--Scalas--Germano Monte-Carlo sample of the turning-time law.
+    """
+    phi = 1.0 / (1.0 + (-1j * omega * tau_turn_S) ** alpha_S)
+    return float(np.real(phi))
+
+
+def search_persistence_factor(omega: float, tau_turn_S: float,
+                              alpha_S: float) -> float:
+    """Directional-persistence enhancement ``1 / (1 - lambda)`` of the
+    search-MSD prefactor, with ``lambda = <cos(Omega_S tau_turn)>``
+    [:func:`ml_cos_mean`].
+
+    The leading Montroll--Weiss resummation counts only the diagonal
+    (single-step) second moment; consecutive relocations stay
+    directionally correlated through Eq. ``eq:search-direction-update``,
+    ``<cos(psi_j - psi_l)> = lambda^{|j-l|}``, which enhances the prefactor
+    by ``1/(1-lambda)`` (for exponential relocation times,
+    ``<(tau^b)^2> = 2 <tau^b>^2``). The exponent ``alpha_S`` is unchanged.
+    """
+    lam = ml_cos_mean(omega, tau_turn_S, alpha_S)
+    return 1.0 / (1.0 - lam)
+
+
+# ---------------------------------------------------------------------------
 # Eq. eq:msd-search — conditional search MSD (asymptotic branches)
 # ---------------------------------------------------------------------------
 
@@ -104,14 +146,21 @@ def search_msd_short(lags: np.ndarray, u_S: float) -> np.ndarray:
 
 
 def search_msd_long(lags: np.ndarray, alpha_S: float, tau_b_S: float,
-                    tau_turn_S: float, u_S: float) -> np.ndarray:
+                    tau_turn_S: float, u_S: float,
+                    Omega_S: float | None = None) -> np.ndarray:
     """Long-lag subdiffusive branch of Eq. ``eq:msd-search``.
 
-    Leading-order Montroll--Weiss prefactor (instantaneous-jump limit
-    ``tau_b^S << tau_turn^S``); the exponent ``alpha_S`` is exact.
+    Montroll--Weiss prefactor in the instantaneous-jump limit
+    (``tau_b^S << tau_turn^S``), multiplied by the directional-persistence
+    factor ``1/(1-lambda)`` with ``lambda = <cos(Omega_S tau_turn)>``
+    [:func:`search_persistence_factor`, Appendix B]; the exponent
+    ``alpha_S`` is exact. ``Omega_S=None`` recovers the uncorrected
+    (decorrelated-direction, ``lambda=0``) prefactor.
     """
+    persistence = (1.0 if Omega_S is None
+                   else search_persistence_factor(Omega_S, tau_turn_S, alpha_S))
     return (
-        2.0 * u_S ** 2 * tau_b_S ** 2
+        2.0 * u_S ** 2 * tau_b_S ** 2 * persistence
         / (tau_turn_S ** alpha_S * gamma_fn(1.0 + alpha_S))
         * lags ** alpha_S
     )
@@ -200,7 +249,9 @@ def compute_Sigma_S(cfg: SoaringConfig) -> float:
     """Per-cycle search displacement variance, Eq. ``eq:SigmaS``.
 
     Uses ``T_phys^S = tau_S^n`` (physical-duration stopping rule), so
-    ``<(T_phys^S)^alpha_S>`` is the Lomax fractional moment.
+    ``<(T_phys^S)^alpha_S>`` is the Lomax fractional moment. The prefactor
+    carries the directional-persistence factor ``1/(1-lambda)`` of
+    :func:`search_persistence_factor` (Appendix B).
     """
     sm = cfg.search_motion
     if sm is None:
@@ -208,8 +259,9 @@ def compute_Sigma_S(cfg: SoaringConfig) -> float:
     mu_S = cfg.search.params["mu"]
     tau_0_S = cfg.search.params["tau_0"]
     T_phys_alpha = lomax_alpha_moment(sm.alpha_S, mu_S, tau_0_S)
+    persistence = search_persistence_factor(sm.Omega_S, sm.tau_turn_S, sm.alpha_S)
     return (
-        2.0 * sm.u_S ** 2 * sm.tau_b_S ** 2
+        2.0 * sm.u_S ** 2 * sm.tau_b_S ** 2 * persistence
         / (sm.tau_turn_S ** sm.alpha_S * gamma_fn(1.0 + sm.alpha_S))
         * T_phys_alpha
     )
