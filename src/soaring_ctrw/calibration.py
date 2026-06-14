@@ -22,14 +22,14 @@ A typical file looks like::
     aircraft: paragliders
     sigma_theta:
       source_script: estimate_sigma_theta
-      value: 0.3899
+      value: 0.4115
       mode: full
       by_mode:
-        bare: 0.4187
-        full: 0.3899
+        bare: 0.4026
+        full: 0.4115
       H_target: 0.88
       fit_window: [10.0, 7000.0]
-      n_trajectories: 1000
+      n_trajectories: 2000
       total_time: 15000.0
     mittag_leffler:
       source_script: compute_ml_median_and_tau_turn

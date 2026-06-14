@@ -45,11 +45,11 @@ The only free parameter is the cycle-to-cycle heading dispersion `σ_θ`,
 calibrated per aircraft against the empirical `H ≈ 0.88`. Calibrated values
 (full-cycle variant, with sub-ensemble standard errors):
 
-| Class         | σ_θ* (rad)       | n_c  | t_c (s) |
-|---------------|------------------|------|---------|
-| Paragliders   | 0.394 ± 0.008    | 12.9 | ~5 400  |
-| Hang gliders  | 0.218 ± 0.005    | 42   | ~18 500 |
-| Sailplanes    | 0.559 ± 0.012    |  6.4 |  ~3 000 |
+| Class         | σ_θ* (rad)       | n_c  | t_c (s)  |
+|---------------|------------------|------|----------|
+| Paragliders   | 0.412 ± 0.009    | 11.8 | ~4 900   |
+| Hang gliders  | 0.242 ± 0.005    | 34.2 | ~15 100  |
+| Sailplanes    | 0.556 ± 0.014    |  6.5 |  ~3 100  |
 
 ---
 
@@ -100,10 +100,34 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]" --config-settings editable_mode=compat
 ```
 
-> **Python 3.14 note.** The `editable_mode=compat` flag is required: Python
-> 3.14 ignores hidden `.pth` files, so the default editable install silently
-> fails to put the package on `sys.path`. The compat mode uses the legacy
-> `easy-install.pth` scheme that 3.14 still loads. Requires `setuptools ≥ 64`.
+What each line does, and why it is necessary:
+
+- **`python -m venv .venv && source .venv/bin/activate`** — creates and
+  activates a *virtual environment*, an isolated Python with its own `pip`
+  and packages, separate from the system Python. This avoids version
+  conflicts with whatever else is installed on the machine and is the
+  standard workflow for any scientific Python project. To use the project
+  in a new shell, just re-run `source .venv/bin/activate`. To wipe
+  everything and start over: `rm -rf .venv`.
+
+- **`pip install -e ".[dev]"`** — the library code lives in
+  `src/soaring_ctrw/`, but the scripts in `scripts/` `import soaring_ctrw`.
+  Without this command, Python would not find the package and every
+  script would fail with `ModuleNotFoundError`. The `-e` (*editable*) flag
+  points the installer at the source tree instead of copying the files,
+  so any edit to `src/soaring_ctrw/` is picked up immediately on the next
+  `python` invocation — no re-install needed. The `[dev]` extra also
+  pulls in test/lint/docs dependencies declared in `pyproject.toml`.
+
+- **`--config-settings editable_mode=compat`** — needed only on **Python
+  3.14** (the version this project targets). The default editable install
+  drops a hidden `__editable__.soaring_ctrw-*.pth` file in
+  `site-packages`; Python 3.14's import loader silently ignores `.pth`
+  files whose name starts with `__`, so `import soaring_ctrw` then fails
+  with no clear error. The `compat` mode uses the legacy
+  `easy-install.pth` scheme that 3.14 still loads. Requires
+  `setuptools ≥ 64`. On Python ≤ 3.13 the flag is harmless and can be
+  dropped.
 
 Verify the install:
 
@@ -134,9 +158,9 @@ Expected output (printed table, columns: aircraft, α_S, m_{1/2}, Ω_S, τ_turn^
 
 ```
 aircraft       alpha_S   m_{1/2}       Omega_S   tau_turn^S       YAML
-paragliders     0.6000   0.867780     0.3000     6.0314    6.0000
-hang_gliders    0.6000   0.867780     0.3000     6.0314    6.0000
-sailplanes      0.4000   0.769446     0.3000     6.7880    7.0000
+paragliders     0.6000   0.605685     0.2700     9.6053    9.605
+hang_gliders    0.6000   0.605685     0.2700     9.6053    9.605
+sailplanes      0.4000   0.580269     0.2900     9.3345    9.334
 ```
 
 A `*** MISMATCH` flag and a `UserWarning` are raised if the calibrated value
@@ -171,7 +195,7 @@ python scripts/estimate_sigma_theta.py \
     --fit-max 7000 \
     --fit-lag-spacing linear \
     --n-log-lags 40 \
-    --n-subensembles 10 \
+    --n-groups 10 \
     --write
 ```
 
@@ -189,9 +213,9 @@ python scripts/estimate_sigma_theta.py \
 Calibrated values written to YAML:
 
 ```
-paragliders:  σ_θ⋆ = 0.394 ± 0.008 rad
-hang_gliders: σ_θ⋆ = 0.218 ± 0.005 rad
-sailplanes:   σ_θ⋆ = 0.559 ± 0.012 rad
+paragliders:  σ_θ⋆ = 0.412 ± 0.009 rad
+hang_gliders: σ_θ⋆ = 0.242 ± 0.005 rad
+sailplanes:   σ_θ⋆ = 0.556 ± 0.014 rad
 ```
 
 (Uncertainties are sub-ensemble standard errors, not OLS standard errors.)

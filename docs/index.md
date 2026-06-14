@@ -1,7 +1,7 @@
 # soaring-ctrw
 
-Companion code for *"A cycle-based model for the universal Hurst exponent
-in thermal soaring flights"* (Di Sante, 2026), extending the empirical
+Companion code for *"How directional persistence shapes the Hurst-exponent crossover
+of thermal soaring flights"* (Di Sante, 2026), extending the empirical
 analysis of Vilpellet, Darmon & Benzaquen
 ([arXiv:2601.01293](https://arxiv.org/abs/2601.01293)).
 
