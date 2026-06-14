@@ -270,8 +270,7 @@ Runtime: ~2 min.
 Reads calibration YAMLs (σ_θ⋆ from Step 3, H_fit from Step 5) and writes
 `outputs/data/paper_macros.tex` with `\newcommand` definitions for every
 numeric quantity in the paper. The paper includes this file via
-`\InputIfFileExists`; if the file is absent, fallback values in the preamble
-are used.
+`\InputIfFileExists`.
 
 ```bash
 python scripts/write_paper_macros.py \
@@ -384,9 +383,11 @@ The OLS standard error on H_fit (printed in legends when `lag_spacing=linear`)
 assumes the log(MSD) points are independent. Adjacent MSD lags of the same
 ensemble are strongly correlated, so the OLS SE (~10⁻⁴–10⁻³) underestimates
 the true fit uncertainty by roughly an order of magnitude. The honest estimate
-is the half-spread of H_fit re-extracted on ten disjoint sub-ensembles
-(replica SE), which is ~0.01 for all three aircraft classes. All scripts report
-replica SE when `--n-groups > 1`.
+is the standard error of the mean of H_fit re-extracted on ten disjoint
+sub-ensembles, `std(H_sub, ddof=1) / √n_groups` (replica SE), which is ~0.01
+for all three aircraft classes. The same convention is used for the σ_θ⋆
+replica SE in `estimate_sigma_theta.py`. All scripts report replica SE when
+`--n-groups > 1`.
 
 ### Float precision
 
