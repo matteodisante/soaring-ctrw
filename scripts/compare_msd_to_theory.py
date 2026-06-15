@@ -202,8 +202,12 @@ def plot_climb(configs: dict[str, SoaringConfig],
                                 cm.T_turn_std, cm.v_drift)
         ax.loglog(grid, exact, ":", lw=1.7, color="0.15",
                   label="period-averaged (exact)")
-        ax.axhline(2.0 * cm.r0 ** 2, color="0.5", ls=":", lw=0.8,
-                    label=rf"$2 r_0^2 = {2*cm.r0**2:.0f}\,\mathrm{{m}}^2$")
+        # Reference plateau: circling saturation 2 r0^2 plus the drift
+        # contribution v_drift^2 Delta^2 evaluated at one turn period.
+        plateau = 2.0 * cm.r0 ** 2 + (cm.v_drift * cm.T_turn_mean) ** 2
+        ax.axhline(plateau, color="0.5", ls=":", lw=0.8,
+                    label=(rf"$2 r_0^2 + v_d^2 T^2 "
+                           rf"= {plateau:.0f}\,\mathrm{{m}}^2$"))
         ax.set_xlabel(r"$\Delta$  (s)")
         if ax is axes[0]:
             ax.set_ylabel(r"$\delta^2_C(\Delta)$  (m$^2$)")
